@@ -15,6 +15,8 @@ modelled on Effect TS. Fibers, interruption, resource safety and layers are
 planned. Targets LuaJIT 2.1 and Lua 5.4.
 ]],
   homepage = "https://github.com/arijit-gogoi/leffect",
+  -- No license chosen yet. Add `license = "..."` here, then restore the
+  -- `luarocks lint` step in .github/workflows/ci.yml.
   labels = { "effect", "functional", "concurrency" },
 }
 
