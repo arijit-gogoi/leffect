@@ -1,0 +1,9 @@
+# Lua and LuaRocks trees (the CI actions install into the checkout)
+/.lua/
+/.luarocks/
+/lua_modules/
+/.install/
+
+# Build and coverage output
+*.rock
+luacov.*.out

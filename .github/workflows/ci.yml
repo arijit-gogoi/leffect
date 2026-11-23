@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.lua }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lua: ["luajit-2.1", "5.4"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: leafo/gh-actions-lua@v13
+        with:
+          luaVersion: ${{ matrix.lua }}
+
+      - uses: leafo/gh-actions-luarocks@v6
+
+      - name: Show interpreter
+        run: lua -v
+
+      - name: Install busted
+        run: luarocks install busted
+
+      - name: Build rock
+        run: luarocks make
+
+      - name: Test
+        run: busted -o utfTerminal
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: StyLua
+        uses: JohnnyMorganz/stylua-action@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: 2.6.0
+          args: --check src spec
+
+      - uses: leafo/gh-actions-lua@v13
+        with:
+          luaVersion: "5.4"
+
+      - uses: leafo/gh-actions-luarocks@v6
+
+      - name: Luacheck
+        run: |
+          luarocks install luacheck
+          luacheck src spec
+
+      - name: Lint rockspec
+        run: luarocks lint leffect-scm-1.rockspec
