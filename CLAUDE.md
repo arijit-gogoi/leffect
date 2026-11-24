@@ -1,3 +1,4 @@
+
 # Leffect
 
 An Effect-TS (v4)-style effect system for Lua: lazy effects, a fiber runtime,
@@ -15,8 +16,9 @@ services/layers. Effect TS's behavior is the reference: when in doubt, match it.
   cancel function, and `scheduler:now()`. Build adapters in this order: test
   scheduler (pure Lua, virtual clock) → luv → OpenResty → LÖVE/Defold tick.
 - **Async primitive:** `Effect.async(function(resume) ... return canceler end)`.
-  Every async operation returns a canceler. `resume` is one-shot: ignore every
-  call after the first.
+  Every async operation returns a canceler (a function, an Effect, or nil).
+  `resume` is one-shot: ignore every call after the first. Wakeups always go
+  through `scheduler:schedule`, so run loops never nest.
 - **Interruption:**
   - It's cooperative and checked between instructions and at async suspension.
   - `fiber:interrupt()` waits for the target's finalizers to finish;
@@ -24,11 +26,12 @@ services/layers. Effect TS's behavior is the reference: when in doubt, match it.
   - Interruption is a Cause, not a failure: `catchAll` must not catch it.
   - Finalizers always run uninterruptibly, and their errors are added to the
     Cause.
-  - The runtime never throws into user code. On interrupt, abandon the
-    suspended coroutine. On 5.4 call `coroutine.close` when available.
+  - The runtime never throws into user code. On failure or interrupt, abandon
+    the suspended gen coroutine.
 - **Errors:** expected failures are tagged tables (`{ _tag = "NotFound", ... }`).
-  Defects are caught with `xpcall(..., debug.traceback)`. Exit is
-  Success | Failure(Cause). Cause = Fail | Die | Interrupt | Sequential | Parallel.
+  Defects are caught with `xpcall` plus a traceback. Exit is
+  Success | Failure(Cause), and exits are themselves effects. Cause is a flat
+  list of reasons (Fail | Die | Interrupt), as in Effect v4.
 - **API style:** methods via a shared metatable (`eff:map(f)`, `eff:flatMap(f)`)
   plus module functions (`Effect.succeed`, `Effect.all`).
 - **Types:** plain Lua with LuaLS `---@` annotations from day one. Teal, Luau
@@ -59,8 +62,9 @@ spec/               -- busted specs
 
 - Effects are data: tables with an `_op` field. Nothing runs until a runtime
   runs it.
-- The run loop is a `while` loop over an explicit continuation stack. It must
-  never recurse, so a million chained `flatMap`s must not overflow.
+- The run loop is a `while` loop over an explicit stack of frames (the frame
+  protocol in `FIBER-DESIGN.md` §3). Use it from M0 on. The loop must never
+  recurse, so a million chained `flatMap`s must not overflow.
 - Before implementing any feature, write busted specs describing Effect TS's
   behavior in its edge cases (for example, interrupt during acquire, or failure
   inside a finalizer). Then make them pass.
@@ -85,5 +89,9 @@ spec/               -- busted specs
 
 ## Reference
 
-Effect v4's fiber runtime source (effect-smol repo) for the run loop's
-structure.
+- `FIBER-DESIGN.md`: the fiber and interruption design (frames, run loop,
+  async, interruption delivery, structured concurrency, gen, scheduler,
+  invariants, and the M1 spec list). Follow it for M1. Propose changes to the
+  doc before deviating in code.
+- Effect v4's source (`Effect-TS/effect-smol`,
+  `packages/effect/src/internal/effect.ts`) for the run loop's structure.
