@@ -1,7 +1,8 @@
 -- Behaviour of the M0 constructors, combinators and runners, following
 -- Effect TS (v4): succeed/fail/die build Exits, a throw anywhere in user code
--- is a defect, catchAll only recovers from expected failures, and runSync
--- throws Cause.squash of the failure.
+-- is a defect that keeps the thrown value and its traceback, catchAll only
+-- recovers from expected failures, and runSync throws Cause.squash of the
+-- failure. A cause is a flat list of reasons.
 
 local leffect = require("leffect")
 local Cause = leffect.Cause
@@ -13,6 +14,13 @@ local function causeOf(effect)
   local exit = Effect.runSyncExit(effect)
   assert.are.equal("Failure", exit._tag)
   return exit.cause
+end
+
+-- Runs `effect`, checks that it failed for a single reason and returns it.
+local function reasonOf(effect)
+  local reasons = causeOf(effect).reasons
+  assert.are.equal(1, #reasons)
+  return reasons[1]
 end
 
 -- Returns a function that counts its calls in `counter.n` and returns `result`.
@@ -125,21 +133,21 @@ describe("Effect", function()
   end)
 
   describe("fail", function()
-    it("fails with a Fail cause holding the error", function()
+    it("fails with a Fail reason holding the error", function()
       local err = { _tag = "NotFound", id = 7 }
-      local cause = causeOf(Effect.fail(err))
-      assert.are.equal("Fail", cause._tag)
-      assert.are.equal(err, cause.error)
+      local reason = reasonOf(Effect.fail(err))
+      assert.are.equal("Fail", reason._tag)
+      assert.are.equal(err, reason.error)
     end)
 
     it("short-circuits: map, flatMap and the effects after it never run", function()
       local calls = { n = 0 }
       local effect =
         Effect.fail("boom"):map(counted(calls)):flatMap(counted(calls, Effect.sync(counted(calls))))
-      local cause = causeOf(effect)
+      local reason = reasonOf(effect)
       assert.are.equal(0, calls.n)
-      assert.are.equal("Fail", cause._tag)
-      assert.are.equal("boom", cause.error)
+      assert.are.equal("Fail", reason._tag)
+      assert.are.equal("boom", reason.error)
     end)
 
     it("stops a chain at the failing step", function()
@@ -154,30 +162,31 @@ describe("Effect", function()
         :flatMap(step(2, Effect.fail("stop")))
         :flatMap(step(3, Effect.succeed(nil)))
         :map(step(4))
-      assert.are.equal("stop", causeOf(effect).error)
+      assert.are.equal("stop", reasonOf(effect).error)
       assert.are.same({ 1, 2 }, steps)
     end)
   end)
 
   describe("die", function()
-    it("fails with a Die cause holding the defect", function()
+    it("fails with a Die reason holding the defect, without a trace", function()
       local defect = { message = "bug" }
-      local cause = causeOf(Effect.die(defect))
-      assert.are.equal("Die", cause._tag)
-      assert.are.equal(defect, cause.defect)
+      local reason = reasonOf(Effect.die(defect))
+      assert.are.equal("Die", reason._tag)
+      assert.are.equal(defect, reason.defect)
+      assert.is_nil(reason.trace)
     end)
 
     it("short-circuits like fail", function()
       local calls = { n = 0 }
-      local cause = causeOf(Effect.die("bug"):map(counted(calls)):flatMap(counted(calls)))
+      local reason = reasonOf(Effect.die("bug"):map(counted(calls)):flatMap(counted(calls)))
       assert.are.equal(0, calls.n)
-      assert.are.equal("bug", cause.defect)
+      assert.are.equal("bug", reason.defect)
     end)
   end)
 
   describe("failCause", function()
     it("fails with the given cause", function()
-      local cause = Cause.parallel(Cause.fail("a"), Cause.die("b"))
+      local cause = Cause.combine(Cause.fail("a"), Cause.die("b"))
       assert.are.equal(cause, causeOf(Effect.failCause(cause)))
     end)
   end)
@@ -209,34 +218,38 @@ describe("Effect", function()
       assert.are.equal(1, argCount)
     end)
 
-    it("turns a thrown error into a defect carrying a traceback", function()
-      local cause = causeOf(Effect.sync(function()
+    it("turns a thrown error into a defect, with the traceback in trace", function()
+      local reason = reasonOf(Effect.sync(function()
         error("boom")
       end))
-      assert.are.equal("Die", cause._tag)
-      assert.are.equal("string", type(cause.defect))
-      assert.matches("boom", cause.defect, 1, true)
-      assert.matches("stack traceback:", cause.defect, 1, true)
-      assert.matches("effect_spec.lua", cause.defect, 1, true)
+      assert.are.equal("Die", reason._tag)
+      assert.are.equal("string", type(reason.defect))
+      assert.matches("boom", reason.defect, 1, true)
+      assert.is_nil(reason.defect:find("stack traceback:", 1, true))
+      assert.matches("boom", reason.trace, 1, true)
+      assert.matches("stack traceback:", reason.trace, 1, true)
+      assert.matches("effect_spec.lua", reason.trace, 1, true)
     end)
 
-    it("keeps a thrown table as the defect itself", function()
+    it("keeps a thrown table as the defect itself, still with a trace", function()
       local thrown = { code = 42 }
-      local cause = causeOf(Effect.sync(function()
+      local reason = reasonOf(Effect.sync(function()
         error(thrown)
       end))
-      assert.are.equal("Die", cause._tag)
-      assert.are.equal(thrown, cause.defect)
+      assert.are.equal("Die", reason._tag)
+      assert.are.equal(thrown, reason.defect)
+      assert.matches("^stack traceback:", reason.trace)
+      assert.matches("effect_spec.lua", reason.trace, 1, true)
     end)
 
     it("treats a throw as a defect, not a failure", function()
       local handled = { n = 0 }
-      local cause = causeOf(Effect.sync(function()
+      local effect = Effect.sync(function()
         error("boom")
-      end):catchAll(counted(handled, Effect.succeed("recovered"))))
+      end):catchAll(counted(handled, Effect.succeed("recovered")))
+      local reason = reasonOf(effect)
       assert.are.equal(0, handled.n)
-      assert.are.equal("Die", cause._tag)
-      assert.are.same({}, (Cause.failures(cause)))
+      assert.are.equal("Die", reason._tag)
     end)
   end)
 
@@ -271,20 +284,20 @@ describe("Effect", function()
 
     it("does not run on failure", function()
       local calls = { n = 0 }
-      assert.are.equal("e", causeOf(Effect.fail("e"):map(counted(calls))).error)
+      assert.are.equal("e", reasonOf(Effect.fail("e"):map(counted(calls))).error)
       assert.are.equal(0, calls.n)
     end)
 
     it("turns a throw into a defect carrying a traceback", function()
       local calls = { n = 0 }
-      local cause = causeOf(Effect.succeed(1)
+      local reason = reasonOf(Effect.succeed(1)
         :map(function()
           error("bad map")
         end)
         :map(counted(calls)))
-      assert.are.equal("Die", cause._tag)
-      assert.matches("bad map", cause.defect, 1, true)
-      assert.matches("stack traceback:", cause.defect, 1, true)
+      assert.are.equal("Die", reason._tag)
+      assert.matches("bad map", reason.defect, 1, true)
+      assert.matches("stack traceback:", reason.trace, 1, true)
       assert.are.equal(0, calls.n)
     end)
   end)
@@ -319,9 +332,9 @@ describe("Effect", function()
     end)
 
     it("fails when the returned effect fails", function()
-      local cause = causeOf(Effect.succeed(1):flatMap(Effect.fail))
-      assert.are.equal("Fail", cause._tag)
-      assert.are.equal(1, cause.error)
+      local reason = reasonOf(Effect.succeed(1):flatMap(Effect.fail))
+      assert.are.equal("Fail", reason._tag)
+      assert.are.equal(1, reason.error)
     end)
 
     it("does not run on failure", function()
@@ -331,28 +344,28 @@ describe("Effect", function()
     end)
 
     it("turns a throw into a defect carrying a traceback", function()
-      local cause = causeOf(Effect.succeed(1):flatMap(function()
+      local reason = reasonOf(Effect.succeed(1):flatMap(function()
         error("bad flatMap")
       end))
-      assert.are.equal("Die", cause._tag)
-      assert.matches("bad flatMap", cause.defect, 1, true)
-      assert.matches("stack traceback:", cause.defect, 1, true)
+      assert.are.equal("Die", reason._tag)
+      assert.matches("bad flatMap", reason.defect, 1, true)
+      assert.matches("stack traceback:", reason.trace, 1, true)
     end)
 
     it("dies when the function returns a value that is not an effect", function()
-      local cause = causeOf(Effect.succeed(1):flatMap(function()
+      local reason = reasonOf(Effect.succeed(1):flatMap(function()
         ---@diagnostic disable-next-line: return-type-mismatch
         return 42
       end))
-      assert.are.equal("Die", cause._tag)
-      assert.matches("Not a valid effect: 42", cause.defect, 1, true)
+      assert.are.equal("Die", reason._tag)
+      assert.matches("Not a valid effect: 42", reason.defect, 1, true)
     end)
 
     it("dies when the function returns nothing", function()
       ---@diagnostic disable-next-line: missing-return
-      local cause = causeOf(Effect.succeed(1):flatMap(function() end))
-      assert.are.equal("Die", cause._tag)
-      assert.matches("Not a valid effect: nil", cause.defect, 1, true)
+      local reason = reasonOf(Effect.succeed(1):flatMap(function() end))
+      assert.are.equal("Die", reason._tag)
+      assert.matches("Not a valid effect: nil", reason.defect, 1, true)
     end)
 
     it("still dies cleanly when the returned value has a broken __tostring", function()
@@ -361,11 +374,11 @@ describe("Effect", function()
           error("no string for you")
         end,
       })
-      local cause = causeOf(Effect.succeed(1):flatMap(function()
+      local reason = reasonOf(Effect.succeed(1):flatMap(function()
         return broken
       end))
-      assert.are.equal("Die", cause._tag)
-      assert.matches("Not a valid effect: table", cause.defect, 1, true)
+      assert.are.equal("Die", reason._tag)
+      assert.matches("Not a valid effect: table", reason.defect, 1, true)
     end)
   end)
 
@@ -426,11 +439,11 @@ describe("Effect", function()
     end)
 
     it("replaces the original error when the handler fails", function()
-      local cause = causeOf(Effect.fail("first"):catchAll(function()
+      local reason = reasonOf(Effect.fail("first"):catchAll(function()
         return Effect.fail("second")
       end))
-      assert.are.equal("Fail", cause._tag)
-      assert.are.equal("second", cause.error)
+      assert.are.equal("Fail", reason._tag)
+      assert.are.equal("second", reason.error)
     end)
 
     it("lets an outer catchAll catch a failure from an inner handler", function()
@@ -456,45 +469,47 @@ describe("Effect", function()
     it("does not catch defects", function()
       local calls = { n = 0 }
       local defect = { message = "bug" }
-      local cause = causeOf(Effect.die(defect):catchAll(counted(calls, Effect.succeed(1))))
+      local reason = reasonOf(Effect.die(defect):catchAll(counted(calls, Effect.succeed(1))))
       assert.are.equal(0, calls.n)
-      assert.are.equal("Die", cause._tag)
-      assert.are.equal(defect, cause.defect)
+      assert.are.equal("Die", reason._tag)
+      assert.are.equal(defect, reason.defect)
     end)
 
     it("does not catch interruption", function()
       local calls = { n = 0 }
       local interrupted = Effect.failCause(Cause.interrupt(7))
-      local cause = causeOf(interrupted:catchAll(counted(calls, Effect.succeed(1))))
+      local reason = reasonOf(interrupted:catchAll(counted(calls, Effect.succeed(1))))
       assert.are.equal(0, calls.n)
-      assert.are.equal("Interrupt", cause._tag)
-      assert.are.equal(7, cause.fiberId)
+      assert.are.equal("Interrupt", reason._tag)
+      assert.are.equal(7, reason.fiberId)
     end)
 
-    it("recovers with the first failure of a composite cause, even next to a defect", function()
-      local mixed =
-        Cause.sequential(Cause.die("bug"), Cause.parallel(Cause.fail("a"), Cause.fail("b")))
+    it("recovers with the first failure of a cause, even after a defect", function()
+      local mixed = Cause.fromReasons({
+        { _tag = "Die", defect = "bug" },
+        { _tag = "Fail", error = "a" },
+        { _tag = "Fail", error = "b" },
+      })
       local effect = Effect.failCause(mixed):catchAll(Effect.succeed)
       assert.are.equal("a", Effect.runSync(effect))
     end)
 
     it("turns a throw in the handler into a defect that replaces the error", function()
-      local cause = causeOf(Effect.fail("e"):catchAll(function()
+      local reason = reasonOf(Effect.fail("e"):catchAll(function()
         error("bad handler")
       end))
-      assert.are.equal("Die", cause._tag)
-      assert.matches("bad handler", cause.defect, 1, true)
-      assert.matches("stack traceback:", cause.defect, 1, true)
-      assert.are.same({}, (Cause.failures(cause)))
+      assert.are.equal("Die", reason._tag)
+      assert.matches("bad handler", reason.defect, 1, true)
+      assert.matches("stack traceback:", reason.trace, 1, true)
     end)
 
     it("dies when the handler returns a value that is not an effect", function()
-      local cause = causeOf(Effect.fail("e"):catchAll(function()
+      local reason = reasonOf(Effect.fail("e"):catchAll(function()
         ---@diagnostic disable-next-line: return-type-mismatch
         return "oops"
       end))
-      assert.are.equal("Die", cause._tag)
-      assert.matches("Not a valid effect: oops", cause.defect, 1, true)
+      assert.are.equal("Die", reason._tag)
+      assert.matches("Not a valid effect: oops", reason.defect, 1, true)
     end)
   end)
 
@@ -520,8 +535,20 @@ describe("Effect", function()
       assert.are.equal(defect, thrown)
     end)
 
+    it("throws the raw defect of a throw, leaving the traceback on the Exit", function()
+      local ok, thrown = pcall(
+        Effect.runSync,
+        Effect.sync(function()
+          error("boom")
+        end)
+      )
+      assert.is_false(ok)
+      assert.matches("boom", thrown, 1, true)
+      assert.is_nil(thrown:find("stack traceback:", 1, true))
+    end)
+
     it("throws the first failure when the cause also has defects", function()
-      local cause = Cause.parallel(Cause.die("bug"), Cause.fail("e"))
+      local cause = Cause.combine(Cause.die("bug"), Cause.fail("e"))
       local ok, thrown = pcall(Effect.runSync, Effect.failCause(cause))
       assert.is_false(ok)
       assert.are.equal("e", thrown)
@@ -565,9 +592,9 @@ describe("Effect", function()
     end)
 
     it("fails with a defect when given something that is not an effect", function()
-      local cause = causeOf(42)
-      assert.are.equal("Die", cause._tag)
-      assert.matches("Not a valid effect: 42", cause.defect, 1, true)
+      local reason = reasonOf(42)
+      assert.are.equal("Die", reason._tag)
+      assert.matches("Not a valid effect: 42", reason.defect, 1, true)
     end)
   end)
 end)

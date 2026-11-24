@@ -1,9 +1,8 @@
 --- Cause: the full story of why an effect failed.
 ---
---- A cause is a tree. Its leaves are expected failures (`Fail`), defects
---- (`Die`) and interruptions (`Interrupt`). `Sequential` and `Parallel` join
---- causes that happened one after the other or at the same time. Queries walk
---- the leaves left to right, without recursion, so deep causes are safe.
+--- As in Effect v4, a cause is a flat list of reasons, in the order they
+--- happened. A reason is an expected failure (`Fail`), a defect (`Die`) or an
+--- interruption (`Interrupt`).
 
 ---@class leffect.Cause.Fail
 ---@field _tag "Fail"
@@ -11,28 +10,25 @@
 
 ---@class leffect.Cause.Die
 ---@field _tag "Die"
----@field defect any The thrown value; a traceback string for thrown strings.
+---@field defect any The thrown value, unchanged.
+---@field trace string? The traceback captured where the runtime caught it.
 
 ---@class leffect.Cause.Interrupt
 ---@field _tag "Interrupt"
----@field fiberId any The fiber that requested the interruption.
+---@field fiberId integer? The fiber that requested the interruption, if any.
 
----@class leffect.Cause.Sequential
----@field _tag "Sequential"
----@field left leffect.Cause
----@field right leffect.Cause
+---@alias leffect.Cause.Reason leffect.Cause.Fail|leffect.Cause.Die|leffect.Cause.Interrupt
 
----@class leffect.Cause.Parallel
----@field _tag "Parallel"
----@field left leffect.Cause
----@field right leffect.Cause
+---@class leffect.Cause
+---@field reasons leffect.Cause.Reason[]
 
----@alias leffect.Cause
----| leffect.Cause.Fail
----| leffect.Cause.Die
----| leffect.Cause.Interrupt
----| leffect.Cause.Sequential
----| leffect.Cause.Parallel
+---An error value created by the runtime: a tagged table with a message.
+---@class leffect.RuntimeError
+---@field _tag string
+---@field message string
+
+---@class leffect.AsyncFiberError : leffect.RuntimeError
+---@field fiber table The fiber that didn't finish.
 
 local getmetatable, setmetatable = getmetatable, setmetatable
 
@@ -40,36 +36,43 @@ local CauseMT = { __name = "leffect.Cause" }
 
 local Cause = {}
 
+---@param reasons leffect.Cause.Reason[]
+---@return leffect.Cause
+local function make(reasons)
+  return setmetatable({ reasons = reasons }, CauseMT)
+end
+
+--- The cause with no reasons. Combining with it changes nothing.
+Cause.empty = make({})
+
 ---@param err any
----@return leffect.Cause.Fail
+---@return leffect.Cause
 function Cause.fail(err)
-  return setmetatable({ _tag = "Fail", error = err }, CauseMT)
+  return make({ { _tag = "Fail", error = err } })
 end
 
 ---@param defect any
----@return leffect.Cause.Die
-function Cause.die(defect)
-  return setmetatable({ _tag = "Die", defect = defect }, CauseMT)
+---@param trace string?
+---@return leffect.Cause
+function Cause.die(defect, trace)
+  return make({ { _tag = "Die", defect = defect, trace = trace } })
 end
 
----@param fiberId any
----@return leffect.Cause.Interrupt
+---@param fiberId integer?
+---@return leffect.Cause
 function Cause.interrupt(fiberId)
-  return setmetatable({ _tag = "Interrupt", fiberId = fiberId }, CauseMT)
+  return make({ { _tag = "Interrupt", fiberId = fiberId } })
 end
 
----@param left leffect.Cause
----@param right leffect.Cause
----@return leffect.Cause.Sequential
-function Cause.sequential(left, right)
-  return setmetatable({ _tag = "Sequential", left = left, right = right }, CauseMT)
-end
-
----@param left leffect.Cause
----@param right leffect.Cause
----@return leffect.Cause.Parallel
-function Cause.parallel(left, right)
-  return setmetatable({ _tag = "Parallel", left = left, right = right }, CauseMT)
+--- A cause holding a copy of `reasons`, duplicates included.
+---@param reasons leffect.Cause.Reason[]
+---@return leffect.Cause
+function Cause.fromReasons(reasons)
+  local copy = {}
+  for i = 1, #reasons do
+    copy[i] = reasons[i]
+  end
+  return make(copy)
 end
 
 ---@param value any
@@ -78,42 +81,69 @@ function Cause.isCause(value)
   return getmetatable(value) == CauseMT
 end
 
--- Both walks below go down the left spine and keep the right branches on an
--- explicit stack, so leaves are visited left to right without recursion.
-
---- Returns the first leaf, left to right, whose tag is `tag`, or nil.
 ---@param cause leffect.Cause
----@param tag string
----@return leffect.Cause?
-local function findLeaf(cause, tag)
-  local nodeTag = cause._tag
-  if nodeTag ~= "Sequential" and nodeTag ~= "Parallel" then
-    -- A single leaf, the common case: no stack needed.
-    if nodeTag == tag then
-      return cause
-    end
-    return nil
-  end
-  local node, stack, top = cause, {}, 0
-  while true do
-    nodeTag = node._tag
-    if nodeTag == "Sequential" or nodeTag == "Parallel" then
-      top = top + 1
-      stack[top] = node.right
-      node = node.left
-    elseif nodeTag == tag then
-      return node
-    elseif top == 0 then
-      return nil
-    else
-      node = stack[top]
-      stack[top] = nil
-      top = top - 1
-    end
-  end
+---@return boolean
+function Cause.isEmpty(cause)
+  return cause.reasons[1] == nil
 end
 
---- Collects `leaf[field]` for every leaf whose tag is `tag`, left to right.
+--- Two reasons are the same if they are one table, or have the same tag and
+--- raw-equal payloads.
+---@param a table
+---@param b table
+---@return boolean
+local function sameReason(a, b)
+  if a == b then
+    return true
+  end
+  local tag = a._tag
+  if tag ~= b._tag then
+    return false
+  elseif tag == "Fail" then
+    return a.error == b.error
+  elseif tag == "Die" then
+    return a.defect == b.defect
+  end
+  return a.fiberId == b.fiberId
+end
+
+--- The reasons of `left`, followed by those of `right` that `left` doesn't
+--- already have (v4's `causeCombine`). Returns `left` when `right` adds nothing.
+---@param left leffect.Cause
+---@param right leffect.Cause
+---@return leffect.Cause
+function Cause.combine(left, right)
+  local a, b = left.reasons, right.reasons
+  local na, nb = #a, #b
+  if na == 0 then
+    return right
+  elseif nb == 0 then
+    return left
+  end
+  local merged, n = {}, na
+  for i = 1, na do
+    merged[i] = a[i]
+  end
+  for j = 1, nb do
+    local reason = b[j]
+    local seen = false
+    for i = 1, n do
+      if sameReason(merged[i], reason) then
+        seen = true
+        break
+      end
+    end
+    if not seen then
+      n = n + 1
+      merged[n] = reason
+    end
+  end
+  if n == na then
+    return left
+  end
+  return make(merged)
+end
+
 ---@param cause leffect.Cause
 ---@param tag string
 ---@param field string
@@ -121,30 +151,33 @@ end
 ---@return integer count
 local function collect(cause, tag, field)
   local values, count = {}, 0
-  local node, stack, top = cause, {}, 0
-  while true do
-    local nodeTag = node._tag
-    if nodeTag == "Sequential" or nodeTag == "Parallel" then
-      top = top + 1
-      stack[top] = node.right
-      node = node.left
-    else
-      if nodeTag == tag then
-        count = count + 1
-        values[count] = node[field]
-      end
-      if top == 0 then
-        return values, count
-      end
-      node = stack[top]
-      stack[top] = nil
-      top = top - 1
+  local reasons = cause.reasons
+  for i = 1, #reasons do
+    local reason = reasons[i]
+    if reason._tag == tag then
+      count = count + 1
+      values[count] = reason[field]
     end
   end
+  return values, count
 end
 
---- Returns the errors of all `Fail` leaves, left to right, and their count.
---- The count matters when an error is nil.
+---@param cause leffect.Cause
+---@param tag string
+---@return table?
+local function find(cause, tag)
+  local reasons = cause.reasons
+  for i = 1, #reasons do
+    local reason = reasons[i]
+    if reason._tag == tag then
+      return reason
+    end
+  end
+  return nil
+end
+
+--- Returns the errors of all `Fail` reasons, in order, and their count. The
+--- count matters when an error is nil.
 ---@param cause leffect.Cause
 ---@return any[] errors
 ---@return integer count
@@ -152,7 +185,7 @@ function Cause.failures(cause)
   return collect(cause, "Fail", "error")
 end
 
---- Returns the defects of all `Die` leaves, left to right, and their count.
+--- Returns the defects of all `Die` reasons, in order, and their count.
 ---@param cause leffect.Cause
 ---@return any[] defects
 ---@return integer count
@@ -160,72 +193,136 @@ function Cause.defects(cause)
   return collect(cause, "Die", "defect")
 end
 
---- Returns `true, error` for the first `Fail` leaf, or `false` if there is none.
+--- Returns the distinct IDs of the fibers that interrupted, in order.
+---@param cause leffect.Cause
+---@return integer[]
+function Cause.interruptors(cause)
+  local ids, n, seen = {}, 0, {}
+  local reasons = cause.reasons
+  for i = 1, #reasons do
+    local reason = reasons[i]
+    if reason._tag == "Interrupt" then
+      local id = reason.fiberId
+      if id ~= nil and not seen[id] then
+        seen[id] = true
+        n = n + 1
+        ids[n] = id
+      end
+    end
+  end
+  return ids
+end
+
+--- Returns `true, error` for the first `Fail` reason, or `false` if there is none.
 ---@param cause leffect.Cause
 ---@return boolean found
 ---@return any error
 function Cause.findError(cause)
-  local leaf = findLeaf(cause, "Fail")
-  if leaf then
-    return true, leaf.error
+  local reason = find(cause, "Fail")
+  if reason then
+    return true, reason.error
   end
   return false, nil
 end
 
---- Returns `true, defect` for the first `Die` leaf, or `false` if there is none.
+--- Returns `true, defect` for the first `Die` reason, or `false` if there is none.
 ---@param cause leffect.Cause
 ---@return boolean found
 ---@return any defect
 function Cause.findDefect(cause)
-  local leaf = findLeaf(cause, "Die")
-  if leaf then
-    return true, leaf.defect
+  local reason = find(cause, "Die")
+  if reason then
+    return true, reason.defect
   end
   return false, nil
 end
 
---- True if the cause contains an expected failure.
+--- True if the cause has an expected failure.
 ---@param cause leffect.Cause
 ---@return boolean
-function Cause.isFailure(cause)
-  return findLeaf(cause, "Fail") ~= nil
+function Cause.hasFails(cause)
+  return find(cause, "Fail") ~= nil
 end
 
---- True if the cause contains a defect.
+--- True if the cause has a defect.
 ---@param cause leffect.Cause
 ---@return boolean
-function Cause.isDie(cause)
-  return findLeaf(cause, "Die") ~= nil
+function Cause.hasDies(cause)
+  return find(cause, "Die") ~= nil
 end
 
---- True if the cause contains an interruption.
+--- True if the cause has an interruption.
 ---@param cause leffect.Cause
 ---@return boolean
-function Cause.isInterrupted(cause)
-  return findLeaf(cause, "Interrupt") ~= nil
+function Cause.hasInterrupts(cause)
+  return find(cause, "Interrupt") ~= nil
 end
 
---- True if every leaf of the cause is an interruption.
+--- True if the cause has at least one reason, and every reason is an
+--- interruption.
 ---@param cause leffect.Cause
 ---@return boolean
-function Cause.isInterruptedOnly(cause)
-  return findLeaf(cause, "Fail") == nil and findLeaf(cause, "Die") == nil
+function Cause.hasInterruptsOnly(cause)
+  local reasons = cause.reasons
+  local n = #reasons
+  if n == 0 then
+    return false
+  end
+  for i = 1, n do
+    if reasons[i]._tag ~= "Interrupt" then
+      return false
+    end
+  end
+  return true
 end
 
---- Reduces a cause to a single value to throw: the first error, else the first
---- defect, else a message saying the fiber was interrupted (as Effect TS does).
+--- Reduces a cause to a single value to throw, as Effect TS does: the first
+--- error, else the first defect, else a message about interruption, else a
+--- message about the empty cause.
 ---@param cause leffect.Cause
 ---@return any
 function Cause.squash(cause)
-  local found, value = Cause.findError(cause)
-  if found then
-    return value
+  local reason = find(cause, "Fail")
+  if reason then
+    return reason.error
   end
-  found, value = Cause.findDefect(cause)
-  if found then
-    return value
+  reason = find(cause, "Die")
+  if reason then
+    return reason.defect
   end
-  return "All fibers interrupted without error"
+  if find(cause, "Interrupt") then
+    return "All fibers interrupted without error"
+  end
+  return "Empty cause"
+end
+
+local ErrorMT = {
+  __name = "leffect.RuntimeError",
+  __tostring = function(err)
+    return err._tag .. ": " .. err.message
+  end,
+}
+
+--- The error `Effect.timeout` fails with.
+---@param message string?
+---@return leffect.RuntimeError
+function Cause.TimeoutError(message)
+  return setmetatable(
+    { _tag = "TimeoutError", message = message or "Operation timed out" },
+    ErrorMT
+  )
+end
+
+--- The defect `Effect.runSync` dies with when the effect doesn't finish
+--- synchronously.
+---@param fiber table The fiber that didn't finish.
+---@return leffect.AsyncFiberError
+function Cause.AsyncFiberError(fiber)
+  return setmetatable({
+    _tag = "AsyncFiberError",
+    message = "An asynchronous effect was executed with Effect.runSync",
+    fiber = fiber,
+  }, ErrorMT)
 end
 
 return Cause

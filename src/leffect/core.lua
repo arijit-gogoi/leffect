@@ -5,9 +5,16 @@
 --- and `isEffect` is a metatable check. As in Effect TS, an Exit is an effect
 --- too: the `Success` and `Failure` instructions are exits.
 ---
---- `leffect.effect` adds the methods to `methods`.
+--- This module holds the primitive constructors. `leffect.effect` builds the
+--- public API on them and adds the methods to `methods`.
 
----@alias leffect.Op "Success"|"Failure"|"Sync"|"Map"|"OnSuccess"|"OnFailure"
+---@alias leffect.Op
+---| "Success"
+---| "Failure"
+---| "Sync"
+---| "Map"
+---| "OnSuccess"
+---| "OnFailure"
 
 ---A lazy description of a computation that succeeds with a value or fails with
 ---a Cause. Nothing runs until a runtime runs it.
@@ -34,7 +41,7 @@
 ---@field cause leffect.Cause
 ---@field thunk fun(): any
 ---@field first leffect.Instruction
----@field f fun(arg: any): any
+---@field f fun(arg: any, ...): any
 
 local getmetatable, setmetatable = getmetatable, setmetatable
 
@@ -45,7 +52,7 @@ core.OP_FAILURE = "Failure" -- { cause }: an Exit
 core.OP_SYNC = "Sync" -- { thunk }
 core.OP_MAP = "Map" -- { first, f }: f(value) becomes the new value
 core.OP_ON_SUCCESS = "OnSuccess" -- { first, f }: flatMap, f(value) is the next effect
-core.OP_ON_FAILURE = "OnFailure" -- { first, f }: f(cause) is the next effect
+core.OP_ON_FAILURE = "OnFailure" -- { first, f }: catchCause, f(cause) is the next effect
 
 core.methods = {}
 
@@ -80,6 +87,36 @@ end
 ---@return leffect.Exit.Failure
 function core.exitFailCause(cause)
   return setmetatable({ _op = OP_FAILURE, _tag = "Failure", cause = cause }, EffectMT)
+end
+
+--- A Success holding nil.
+core.exitVoid = core.exitSucceed(nil)
+
+---@param thunk fun(): any
+---@return leffect.Effect
+function core.sync(thunk)
+  return setmetatable({ _op = core.OP_SYNC, thunk = thunk }, EffectMT)
+end
+
+---@param self leffect.Effect
+---@param f fun(value: any): any
+---@return leffect.Effect
+function core.map(self, f)
+  return setmetatable({ _op = core.OP_MAP, first = self, f = f }, EffectMT)
+end
+
+---@param self leffect.Effect
+---@param f fun(value: any): leffect.Effect
+---@return leffect.Effect
+function core.flatMap(self, f)
+  return setmetatable({ _op = core.OP_ON_SUCCESS, first = self, f = f }, EffectMT)
+end
+
+---@param self leffect.Effect
+---@param f fun(cause: leffect.Cause): leffect.Effect
+---@return leffect.Effect
+function core.catchCause(self, f)
+  return setmetatable({ _op = core.OP_ON_FAILURE, first = self, f = f }, EffectMT)
 end
 
 return core

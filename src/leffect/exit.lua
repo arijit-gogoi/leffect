@@ -15,6 +15,9 @@ local Exit = {}
 --- A successful Exit holding `value`.
 Exit.succeed = core.exitSucceed
 
+--- A successful Exit holding nil.
+Exit.void = core.exitVoid
+
 --- A failed Exit holding `cause`.
 Exit.failCause = exitFailCause
 
@@ -25,11 +28,20 @@ function Exit.fail(err)
   return exitFailCause(Cause.fail(err))
 end
 
---- A failed Exit whose cause is the defect `defect`.
+--- A failed Exit whose cause is the defect `defect`, with an optional
+--- traceback.
 ---@param defect any
+---@param trace string?
 ---@return leffect.Exit.Failure
-function Exit.die(defect)
-  return exitFailCause(Cause.die(defect))
+function Exit.die(defect, trace)
+  return exitFailCause(Cause.die(defect, trace))
+end
+
+--- A failed Exit whose cause is an interruption by the fiber `fiberId`.
+---@param fiberId integer?
+---@return leffect.Exit.Failure
+function Exit.interrupt(fiberId)
+  return exitFailCause(Cause.interrupt(fiberId))
 end
 
 --- True if `value` is an Exit.

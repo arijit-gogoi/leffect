@@ -42,6 +42,7 @@ build = {
     ["leffect.core"] = "src/leffect/core.lua",
     ["leffect.effect"] = "src/leffect/effect.lua",
     ["leffect.exit"] = "src/leffect/exit.lua",
+    ["leffect.fiber"] = "src/leffect/fiber.lua",
     ["leffect.runtime"] = "src/leffect/runtime.lua",
   },
 }

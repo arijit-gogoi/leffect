@@ -1,5 +1,6 @@
--- The run loop iterates over an explicit continuation stack and never
--- recurses, so chains of any depth run in constant Lua/C stack space.
+-- The run loop iterates over an explicit stack of frames and never recurses,
+-- so chains of any depth run in constant Lua/C stack space. runSync runs
+-- them on a fiber that yields to its scheduler every 2048 ops.
 
 local Effect = require("leffect").Effect
 
@@ -52,7 +53,7 @@ describe("run loop", function()
     end
     local exit = Effect.runSyncExit(effect)
     assert.are.equal("Failure", exit._tag)
-    assert.are.equal("early", exit.cause.error)
+    assert.are.equal("early", exit.cause.reasons[1].error)
     assert.are.equal(0, calls)
   end)
 
@@ -80,7 +81,7 @@ describe("run loop", function()
     end
     local exit = Effect.runSyncExit(effect)
     assert.are.equal("Failure", exit._tag)
-    assert.are.equal(N, exit.cause.error)
+    assert.are.equal(N, exit.cause.reasons[1].error)
   end)
 
   it("recovers from a failure beneath 1e6 pending flatMaps", function()
