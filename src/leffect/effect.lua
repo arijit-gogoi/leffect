@@ -135,6 +135,22 @@ local function startRoot(effect, scheduler)
   return fiber
 end
 
+---@class leffect.RunForkOptions
+---@field scheduler leffect.Scheduler
+
+--- Starts `effect` on a new root fiber on `options.scheduler`, on the next
+--- tick, and returns the fiber.
+---@param effect leffect.Effect
+---@param options leffect.RunForkOptions
+---@return leffect.Fiber
+function Effect.runFork(effect, options)
+  local scheduler = options and options.scheduler
+  if not scheduler then
+    error("Effect.runFork: options.scheduler is required", 2)
+  end
+  return startRoot(effect, scheduler)
+end
+
 --- Runs `effect` synchronously on a fiber of its own and returns its Exit.
 --- An Exit is returned as is. Never throws.
 ---@param effect leffect.Effect
