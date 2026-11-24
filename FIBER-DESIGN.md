@@ -423,7 +423,7 @@ evaluate.Async = function(op, fiber)
     return Exit.die("Effect.async: a canceler must be a function, an Effect or nil")
   end
   fiber.suspension = s
-  if cancel then push(fiber, { _op = "AsyncCancel", cancel = cancel, s = s }) end
+  if cancel then push(fiber, { _op = "AsyncCancel", cancel = cancel, suspension = s }) end
   return YIELD
 end
 ```
@@ -436,7 +436,7 @@ onFailure.AsyncCancel = function(frame, cause, fiber)
   -- Run the canceler only if the operation never completed. Wakeups are
   -- scheduled, so an interrupt can arrive after `resume` but before the
   -- wakeup runs. The operation is done by then; there is nothing to cancel.
-  if frame.s.completed or not Cause.hasInterrupts(cause) then
+  if frame.suspension.completed or not Cause.hasInterrupts(cause) then
     return Exit.failCause(cause)
   end
   -- A canceler is a finalizer: its own failure is added to the cause.

@@ -40,7 +40,15 @@ local exitSucceed, exitFailCause = core.exitSucceed, core.exitFailCause
 ---@field pendingInterrupt boolean
 ---@field opCount integer
 ---@field finalExit leffect.Exit?
+---@field suspension leffect.Suspension?
 ---@field evaluate fun(self: leffect.FiberState, effect: leffect.Effect)
+
+---Internal: the state of one async wait (FIBER-DESIGN.md §6.2).
+---@class leffect.Suspension
+---@field resumed boolean No further wakeup may happen: the operation or an interrupt won.
+---@field completed boolean The operation itself called resume.
+---@field registering boolean
+---@field value any The effect passed to a resume made during register.
 
 ---@alias leffect.Handler fun(frame: table?, arg: any, fiber: leffect.FiberState): any
 
@@ -223,7 +231,13 @@ onFailure.OnFailure = function(frame, cause)
   return frame.f(cause)
 end
 
--- The loop ------------------------------------------------------------------
+evaluate.Suspend = function(op)
+  return op.thunk()
+end
+
+evaluate.WithFiber = function(op, fiber)
+  return op.f(fiber)
+end
 
 --- Schedules `fiber:evaluate(effect)` on the next tick and suspends the fiber.
 ---@param fiber leffect.FiberState
@@ -237,6 +251,205 @@ local function yieldWith(fiber, effect)
 end
 
 runtime.yieldWith = yieldWith
+
+evaluate.Yield = function(_, fiber)
+  return yieldWith(fiber, core.exitVoid)
+end
+
+-- Interruptibility (FIBER-DESIGN.md §7.4) -----------------------------------
+
+-- Restore frames set the interruptible flag back when popped. Restoring to
+-- interruptible while an interrupt is pending delivers it right there.
+local RESTORE_TRUE = { _op = "Restore", interruptible = true }
+local RESTORE_FALSE = { _op = "Restore", interruptible = false }
+
+---@type leffect.Handler
+local function failWithInterrupt(_, _, fiber)
+  return exitFailCause(fiber.interruptCause --[[@as leffect.Cause]])
+end
+
+onPop.Restore = function(frame, fiber)
+  local interruptible = frame.interruptible
+  fiber.interruptible = interruptible
+  if interruptible and fiber.interruptCause then
+    return failWithInterrupt
+  end
+  return nil
+end
+
+--- The onPop of finalizer and canceler frames: they always run
+--- uninterruptibly.
+---@param fiber leffect.FiberState
+local function makeUninterruptible(_, fiber)
+  if fiber.interruptible then
+    fiber.interruptible = false
+    push(fiber, RESTORE_TRUE)
+  end
+  return nil
+end
+
+--- Runs `effect` uninterruptibly. An interrupt that arrives meanwhile is
+--- delivered when the region ends.
+---@param effect leffect.Effect
+---@return leffect.Effect
+function runtime.uninterruptible(effect)
+  return core.withFiber(function(fiber)
+    if fiber.interruptible then
+      fiber.interruptible = false
+      push(fiber, RESTORE_TRUE)
+    end
+    return effect
+  end)
+end
+
+--- Runs `effect` interruptibly. If the fiber was already interrupted, fails
+--- at once instead.
+---@param effect leffect.Effect
+---@return leffect.Effect
+function runtime.interruptible(effect)
+  return core.withFiber(function(fiber)
+    if fiber.interruptible then
+      return effect
+    end
+    fiber.interruptible = true
+    push(fiber, RESTORE_FALSE)
+    local cause = fiber.interruptCause
+    if cause then
+      return exitFailCause(cause)
+    end
+    return effect
+  end)
+end
+
+local function identity(effect)
+  return effect
+end
+
+--- Runs `body(restore)` uninterruptibly. `restore(e)` runs `e` with the
+--- interruptibility the mask was entered with, so nested masks compose.
+---@param body fun(restore: fun(effect: leffect.Effect): leffect.Effect): leffect.Effect
+---@return leffect.Effect
+function runtime.uninterruptibleMask(body)
+  return core.withFiber(function(fiber)
+    if not fiber.interruptible then
+      return body(identity)
+    end
+    fiber.interruptible = false
+    push(fiber, RESTORE_TRUE)
+    return body(runtime.interruptible)
+  end)
+end
+
+-- Finalizers (FIBER-DESIGN.md §7.5) -----------------------------------------
+
+-- A FinalizerResult frame sits under a running finalizer. When the finalizer
+-- succeeds it returns the original exit; when it fails, it adds the
+-- finalizer's cause to the original one instead of replacing it.
+onSuccess.FinalizerResult = function(frame)
+  ---@cast frame -nil
+  return frame.exit
+end
+
+onFailure.FinalizerResult = function(frame, cause)
+  ---@cast frame -nil
+  local exit = frame.exit
+  if exit._op == core.OP_FAILURE then
+    return exitFailCause(Cause.combine(exit.cause, cause))
+  end
+  return exitFailCause(cause)
+end
+
+---@param f fun(exit: leffect.Exit): leffect.Effect?
+---@param exit leffect.Exit
+---@param fiber leffect.FiberState
+local function runFinalizer(f, exit, fiber)
+  -- Pushed first, so a throw in `f` meets it too: the restarted loop's Die is
+  -- then added to `exit` instead of replacing it.
+  push(fiber, { _op = "FinalizerResult", exit = exit })
+  local finalizer = f(exit)
+  if finalizer == nil then
+    local top = fiber.top
+    fiber.stack[top] = nil
+    fiber.top = top - 1
+    return exit
+  end
+  return finalizer
+end
+
+evaluate.OnExit = pushSelf
+onPop.OnExit = makeUninterruptible
+
+onSuccess.OnExit = function(frame, value, fiber)
+  ---@cast frame leffect.Instruction
+  return runFinalizer(frame.f, exitSucceed(value), fiber)
+end
+
+onFailure.OnExit = function(frame, cause, fiber)
+  ---@cast frame leffect.Instruction
+  return runFinalizer(frame.f, exitFailCause(cause), fiber)
+end
+
+-- Async (FIBER-DESIGN.md §6) ------------------------------------------------
+
+evaluate.Async = function(op, fiber)
+  ---@type leffect.Suspension
+  local suspension = { resumed = false, completed = false, registering = true }
+  local function resume(effect)
+    if suspension.resumed then
+      return
+    end
+    suspension.resumed = true
+    suspension.completed = true
+    if suspension.registering then
+      suspension.value = effect
+      return
+    end
+    fiber.scheduler:schedule(function()
+      fiber:evaluate(effect)
+    end)
+  end
+  local ok, cancel = xpcall(op.register, captureDefect, resume)
+  suspension.registering = false
+  if not ok then
+    suspension.resumed = true
+    return exitFailCause(defectCause(cancel))
+  end
+  -- Test `completed`, not `value`: a synchronous resume(nil) must reach the
+  -- loop's "Not a valid effect" check instead of suspending forever.
+  if suspension.completed then
+    return suspension.value
+  end
+  if type(cancel) == "function" then
+    cancel = core.sync(cancel)
+  elseif cancel ~= nil and getmetatable(cancel) ~= EffectMT then
+    suspension.resumed = true
+    return exitFailCause(
+      Cause.die(
+        "Effect.async: a canceler must be a function, an effect or nil, got " .. describe(cancel)
+      )
+    )
+  end
+  fiber.suspension = suspension
+  if cancel ~= nil then
+    push(fiber, { _op = "AsyncCancel", cancel = cancel, suspension = suspension })
+  end
+  return YIELD
+end
+
+onPop.AsyncCancel = makeUninterruptible
+
+-- Runs the canceler only if the operation never completed: wakeups are
+-- scheduled, so an interrupt can arrive after `resume` but before the wakeup
+-- runs, and then there is nothing left to cancel. A canceler is a finalizer,
+-- so its own failure is added to the cause.
+onFailure.AsyncCancel = function(frame, cause, fiber)
+  ---@cast frame -nil
+  if frame.suspension.completed or not Cause.hasInterrupts(cause) then
+    return exitFailCause(cause)
+  end
+  push(fiber, { _op = "FinalizerResult", exit = exitFailCause(cause) })
+  return frame.cancel
+end
 
 ---@param fiber leffect.FiberState
 ---@param cur any

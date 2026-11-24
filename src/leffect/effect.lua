@@ -7,6 +7,7 @@
 local Cause = require("leffect.cause")
 local Fiber = require("leffect.fiber")
 local core = require("leffect.core")
+local runtime = require("leffect.runtime")
 
 local error, setmetatable, time = error, setmetatable, os.time
 
@@ -75,6 +76,239 @@ end
 
 --- True if `value` is an effect (Exits included).
 Effect.isEffect = core.isEffect
+
+--- An effect that succeeds with nil.
+---@type leffect.Effect
+Effect.void = core.exitVoid
+
+--- Recovers from any failure (errors, defects, interruptions) with the effect
+--- returned by `f(cause)`. While the fiber is being interrupted, the handler
+--- is skipped.
+Effect.catchCause = core.catchCause
+
+--- An effect built by `thunk()` each time it runs. A throw is a defect.
+Effect.suspend = core.suspend
+
+--- An effect built by `f(fiber)` from the fiber running it.
+Effect.withFiber = core.withFiber
+
+--- Replaces the success value with `value`.
+---@param self leffect.Effect
+---@param value any
+---@return leffect.Effect
+function Effect.as(self, value)
+  return core.map(self, function()
+    return value
+  end)
+end
+
+--- Replaces the success value with nil.
+Effect.asVoid = core.asVoid
+
+-- Async ---------------------------------------------------------------------
+
+--- An effect that suspends the fiber until `register` calls `resume(effect)`;
+--- it then continues with `effect`. Only the first resume counts. `register`
+--- may return a canceler, a function or an effect, which runs if the fiber is
+--- interrupted before the operation completes.
+Effect.async = core.async
+
+--- An effect that never completes.
+Effect.never = core.async(function() end)
+
+--- An effect that lets the other fibers run, then succeeds with nil.
+Effect.yieldNow = core.yieldNow
+
+--- An effect that succeeds with nil after `ms` milliseconds of the fiber's
+--- scheduler.
+---@param ms number
+---@return leffect.Effect
+function Effect.sleep(ms)
+  return core.withFiber(function(fiber)
+    local scheduler = fiber.scheduler
+    return core.async(function(resume)
+      return scheduler:after(ms, function()
+        resume(core.exitVoid)
+      end)
+    end)
+  end)
+end
+
+-- Interruption --------------------------------------------------------------
+
+--- An effect that interrupts the fiber running it. Finalizers run, and the
+--- exit's cause is an interruption by this fiber. As in v4, `catchCause` can
+--- catch it, but `catchAll` can't.
+Effect.interrupt = core.withFiber(function(fiber)
+  return exitFailCause(Cause.interrupt(fiber.id))
+end)
+
+Effect.uninterruptible = runtime.uninterruptible
+Effect.interruptible = runtime.interruptible
+Effect.uninterruptibleMask = runtime.uninterruptibleMask
+
+-- Finalizers ----------------------------------------------------------------
+
+--- Runs `f(exit)` after `self` finishes, however it finishes, and
+--- uninterruptibly. `f` returns an effect or nil. The result is `self`'s exit;
+--- a failure of the finalizer is added to it.
+Effect.onExit = core.onExit
+
+--- Runs `finalizer` after `self` finishes, however it finishes.
+---@param self leffect.Effect
+---@param finalizer leffect.Effect
+---@return leffect.Effect
+function Effect.ensuring(self, finalizer)
+  return core.onExit(self, function()
+    return finalizer
+  end)
+end
+
+--- Runs `f(interruptors)` if `self` is interrupted: when its cause has an
+--- Interrupt reason. `interruptors` lists the interrupting fiber IDs.
+---@param self leffect.Effect
+---@param f fun(interruptors: integer[]): leffect.Effect?
+---@return leffect.Effect
+function Effect.onInterrupt(self, f)
+  return core.onExit(self, function(exit)
+    if exit._op == core.OP_FAILURE and Cause.hasInterrupts(exit.cause) then
+      return f(Cause.interruptors(exit.cause))
+    end
+    return nil
+  end)
+end
+
+-- Fibers --------------------------------------------------------------------
+
+--- Starts `self` on a child fiber, on the next tick, and succeeds with the
+--- fiber. The parent interrupts its children before it exits.
+---@param self leffect.Effect
+---@return leffect.Effect
+function Effect.fork(self)
+  return core.withFiber(function(parent)
+    return exitSucceed(Fiber.forkUnsafe(parent, self, false, false))
+  end)
+end
+
+--- Like `fork`, but the fiber isn't attached to the parent and can outlive it.
+---@param self leffect.Effect
+---@return leffect.Effect
+function Effect.forkDaemon(self)
+  return core.withFiber(function(parent)
+    return exitSucceed(Fiber.forkUnsafe(parent, self, true, false))
+  end)
+end
+
+--- Races `effects` on child fibers (FIBER-DESIGN.md §8.1). A winner is the
+--- first success, or the first exit if `firstExitWins`. The losers are
+--- interrupted and awaited before the race returns. Without a winner, the
+--- race fails with every racer's reasons.
+---@param effects leffect.Effect[]
+---@param firstExitWins boolean
+---@return leffect.Effect
+local function race(effects, firstExitWins)
+  local count = #effects
+  if count == 0 then
+    return Effect.die("Effect.raceAll: there are no effects to race")
+  end
+  return core.withFiber(function(parent)
+    return core.async(function(resume)
+      local racers, running = {}, {}
+      for i = 1, count do
+        local racer = Fiber.forkUnsafe(parent, effects[i], true, false)
+        racers[i] = racer
+        running[racer] = true
+      end
+      local function stillRunning()
+        local list = {}
+        for i = 1, count do
+          local racer = racers[i]
+          if running[racer] then
+            list[#list + 1] = racer
+          end
+        end
+        return list
+      end
+      local reasons, failed = {}, 0
+      for i = 1, count do
+        local racer = racers[i]
+        racer:addObserver(function(exit)
+          running[racer] = nil
+          if firstExitWins or exit._op == core.OP_SUCCESS then
+            local losers = stillRunning()
+            if #losers == 0 then
+              resume(exit)
+            else
+              local stopLosers = runtime.uninterruptible(Fiber.interruptAllAs(losers, parent.id))
+              resume(core.flatMap(stopLosers, function()
+                return exit
+              end))
+            end
+          else
+            failed = failed + 1
+            local lost = exit.cause.reasons
+            for j = 1, #lost do
+              reasons[#reasons + 1] = lost[j]
+            end
+            if failed == count then
+              resume(exitFailCause(Cause.fromReasons(reasons)))
+            end
+          end
+        end)
+      end
+      -- If the racing fiber is interrupted, stop every racer and wait for them.
+      return core.suspend(function()
+        return Fiber.interruptAllAs(stillRunning(), parent.id)
+      end)
+    end)
+  end)
+end
+
+--- Succeeds with the first of `effects` to succeed, and fails only if all of
+--- them fail. The losers are interrupted and awaited before it returns.
+---@param effects leffect.Effect[]
+---@return leffect.Effect
+function Effect.raceAll(effects)
+  return race(effects, false)
+end
+
+--- `raceAll({ self, that })`.
+---@param self leffect.Effect
+---@param that leffect.Effect
+---@return leffect.Effect
+function Effect.race(self, that)
+  return race({ self, that }, false)
+end
+
+--- Finishes like the first of `self` and `that` to finish, success or
+--- failure. The loser is interrupted and awaited before it returns.
+---@param self leffect.Effect
+---@param that leffect.Effect
+---@return leffect.Effect
+function Effect.raceFirst(self, that)
+  return race({ self, that }, true)
+end
+
+--- Runs `self`, but if it takes longer than `ms` milliseconds, interrupts it
+--- and continues with `orElse()` instead.
+---@param self leffect.Effect
+---@param ms number
+---@param orElse fun(): leffect.Effect
+---@return leffect.Effect
+function Effect.timeoutOrElse(self, ms, orElse)
+  return Effect.raceFirst(self, core.flatMap(Effect.sleep(ms), orElse))
+end
+
+--- Runs `self`, but if it takes longer than `ms` milliseconds, interrupts it
+--- and fails with `Cause.TimeoutError()`.
+---@param self leffect.Effect
+---@param ms number
+---@return leffect.Effect
+function Effect.timeout(self, ms)
+  return Effect.timeoutOrElse(self, ms, function()
+    return Effect.fail(Cause.TimeoutError())
+  end)
+end
 
 -- Runners -------------------------------------------------------------------
 
@@ -152,7 +386,9 @@ function Effect.runFork(effect, options)
 end
 
 --- Runs `effect` synchronously on a fiber of its own and returns its Exit.
---- An Exit is returned as is. Never throws.
+--- An Exit is returned as is. Never throws. An effect that doesn't finish
+--- synchronously (it waits for a timer, say) is interrupted, so that its
+--- finalizers run, and the result is `Die(Cause.AsyncFiberError(fiber))`.
 ---@param effect leffect.Effect
 ---@return leffect.Exit
 function Effect.runSyncExit(effect)
@@ -166,6 +402,10 @@ function Effect.runSyncExit(effect)
   if exit then
     return exit
   end
+  -- Nothing will ever run this private scheduler again: interrupt the fiber
+  -- now, so that its finalizers run.
+  fiber:interruptUnsafe(nil)
+  scheduler:flush()
   return exitFailCause(Cause.die(Cause.AsyncFiberError(fiber)))
 end
 
@@ -185,5 +425,19 @@ local methods = core.methods
 methods.map = Effect.map
 methods.flatMap = Effect.flatMap
 methods.catchAll = Effect.catchAll
+methods.catchCause = Effect.catchCause
+methods.as = Effect.as
+methods.asVoid = Effect.asVoid
+methods.uninterruptible = Effect.uninterruptible
+methods.interruptible = Effect.interruptible
+methods.onExit = Effect.onExit
+methods.ensuring = Effect.ensuring
+methods.onInterrupt = Effect.onInterrupt
+methods.fork = Effect.fork
+methods.forkDaemon = Effect.forkDaemon
+methods.race = Effect.race
+methods.raceFirst = Effect.raceFirst
+methods.timeout = Effect.timeout
+methods.timeoutOrElse = Effect.timeoutOrElse
 
 return Effect

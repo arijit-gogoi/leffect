@@ -12,9 +12,18 @@
 ---| "Success"
 ---| "Failure"
 ---| "Sync"
+---| "Suspend"
 ---| "Map"
 ---| "OnSuccess"
 ---| "OnFailure"
+---| "OnExit"
+---| "WithFiber"
+---| "Async"
+---| "Yield"
+
+---A canceler: a function or an effect, run when an async operation is
+---interrupted.
+---@alias leffect.Canceler fun()|leffect.Effect
 
 ---A lazy description of a computation that succeeds with a value or fails with
 ---a Cause. Nothing runs until a runtime runs it.
@@ -23,6 +32,20 @@
 ---@field map fun(self: leffect.Effect, f: fun(value: any): any): leffect.Effect
 ---@field flatMap fun(self: leffect.Effect, f: fun(value: any): leffect.Effect): leffect.Effect
 ---@field catchAll fun(self: leffect.Effect, f: fun(err: any): leffect.Effect): leffect.Effect
+---@field catchCause fun(self: leffect.Effect, f: fun(cause: leffect.Cause): leffect.Effect): leffect.Effect
+---@field onExit fun(self: leffect.Effect, f: fun(exit: leffect.Exit): leffect.Effect?): leffect.Effect
+---@field ensuring fun(self: leffect.Effect, finalizer: leffect.Effect): leffect.Effect
+---@field onInterrupt fun(self: leffect.Effect, f: fun(interruptors: integer[]): leffect.Effect?): leffect.Effect
+---@field uninterruptible fun(self: leffect.Effect): leffect.Effect
+---@field interruptible fun(self: leffect.Effect): leffect.Effect
+---@field fork fun(self: leffect.Effect): leffect.Effect
+---@field forkDaemon fun(self: leffect.Effect): leffect.Effect
+---@field race fun(self: leffect.Effect, that: leffect.Effect): leffect.Effect
+---@field raceFirst fun(self: leffect.Effect, that: leffect.Effect): leffect.Effect
+---@field timeout fun(self: leffect.Effect, ms: number): leffect.Effect
+---@field timeoutOrElse fun(self: leffect.Effect, ms: number, orElse: fun(): leffect.Effect): leffect.Effect
+---@field as fun(self: leffect.Effect, value: any): leffect.Effect
+---@field asVoid fun(self: leffect.Effect): leffect.Effect
 
 ---@class leffect.Exit.Success : leffect.Effect
 ---@field _tag "Success"
@@ -42,6 +65,7 @@
 ---@field thunk fun(): any
 ---@field first leffect.Instruction
 ---@field f fun(arg: any, ...): any
+---@field register fun(resume: fun(effect: leffect.Effect)): leffect.Canceler?
 
 local getmetatable, setmetatable = getmetatable, setmetatable
 
@@ -53,6 +77,11 @@ core.OP_SYNC = "Sync" -- { thunk }
 core.OP_MAP = "Map" -- { first, f }: f(value) becomes the new value
 core.OP_ON_SUCCESS = "OnSuccess" -- { first, f }: flatMap, f(value) is the next effect
 core.OP_ON_FAILURE = "OnFailure" -- { first, f }: catchCause, f(cause) is the next effect
+core.OP_SUSPEND = "Suspend" -- { thunk }: thunk() is the next effect
+core.OP_ON_EXIT = "OnExit" -- { first, f }: finalizer, f(exit) returns an effect or nil
+core.OP_WITH_FIBER = "WithFiber" -- { f }: f(fiber) is the next effect
+core.OP_ASYNC = "Async" -- { register }: register(resume) returns a canceler or nil
+core.OP_YIELD = "Yield" -- {}: lets other fibers run, then succeeds with nil
 
 core.methods = {}
 
@@ -117,6 +146,42 @@ end
 ---@return leffect.Effect
 function core.catchCause(self, f)
   return setmetatable({ _op = core.OP_ON_FAILURE, first = self, f = f }, EffectMT)
+end
+
+---@param thunk fun(): leffect.Effect
+---@return leffect.Effect
+function core.suspend(thunk)
+  return setmetatable({ _op = core.OP_SUSPEND, thunk = thunk }, EffectMT)
+end
+
+---@param self leffect.Effect
+---@param f fun(exit: leffect.Exit): leffect.Effect?
+---@return leffect.Effect
+function core.onExit(self, f)
+  return setmetatable({ _op = core.OP_ON_EXIT, first = self, f = f }, EffectMT)
+end
+
+---@param f fun(fiber: leffect.Fiber): leffect.Effect
+---@return leffect.Effect
+function core.withFiber(f)
+  return setmetatable({ _op = core.OP_WITH_FIBER, f = f }, EffectMT)
+end
+
+---@param register fun(resume: fun(effect: leffect.Effect)): leffect.Canceler?
+---@return leffect.Effect
+function core.async(register)
+  return setmetatable({ _op = core.OP_ASYNC, register = register }, EffectMT)
+end
+
+--- Lets the other fibers run, then succeeds with nil.
+core.yieldNow = setmetatable({ _op = core.OP_YIELD }, EffectMT)
+
+local function noop() end
+
+---@param self leffect.Effect
+---@return leffect.Effect
+function core.asVoid(self)
+  return core.map(self, noop)
 end
 
 return core

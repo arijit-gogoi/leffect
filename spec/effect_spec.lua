@@ -8,6 +8,7 @@ local leffect = require("leffect")
 local Cause = leffect.Cause
 local Effect = leffect.Effect
 local Exit = leffect.Exit
+local TestScheduler = require("leffect.scheduler.test")
 
 -- Runs `effect`, checks that it failed and returns the Cause.
 local function causeOf(effect)
@@ -510,6 +511,53 @@ describe("Effect", function()
       end))
       assert.are.equal("Die", reason._tag)
       assert.matches("Not a valid effect: oops", reason.defect, 1, true)
+    end)
+  end)
+
+  describe("catchCause", function()
+    it("recovers from any cause, passing the cause to the handler", function()
+      local effect = Effect.die("bug"):catchCause(function(cause)
+        return Effect.succeed((Cause.defects(cause))[1])
+      end)
+      assert.are.equal("bug", Effect.runSync(effect))
+    end)
+
+    it("leaves a success alone", function()
+      local calls = { n = 0 }
+      local effect = Effect.catchCause(Effect.succeed(1), counted(calls, Effect.succeed(2)))
+      assert.are.equal(1, Effect.runSync(effect))
+      assert.are.equal(0, calls.n)
+    end)
+  end)
+
+  describe("suspend", function()
+    it("builds the effect lazily, each time it runs", function()
+      local builds = 0
+      local effect = Effect.suspend(function()
+        builds = builds + 1
+        return Effect.succeed(builds)
+      end)
+      assert.are.equal(0, builds)
+      assert.are.equal(1, Effect.runSync(effect))
+      assert.are.equal(2, Effect.runSync(effect))
+    end)
+  end)
+
+  describe("as, asVoid and void", function()
+    it("replace the success value", function()
+      assert.are.equal("x", Effect.runSync(Effect.succeed(1):as("x")))
+      assert.is_nil(Effect.runSync(Effect.succeed(1):asVoid()))
+      assert.is_nil(Effect.runSync(Effect.void))
+    end)
+  end)
+
+  describe("withFiber", function()
+    it("passes the running fiber to the function", function()
+      local exit, fiber = TestScheduler.new():run(Effect.withFiber(function(f)
+        return Effect.succeed(f)
+      end))
+      ---@cast exit -nil
+      assert.are.equal(fiber, exit.value)
     end)
   end)
 
