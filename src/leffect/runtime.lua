@@ -1,11 +1,11 @@
 --- The run loop.
 ---
 --- A fiber runs an effect with a `while` loop over its own explicit stack of
---- frames (FIBER-DESIGN.md §3 and §5). Ops that wait for a result push
---- themselves as frames, and `Success`, `Failure` and `Sync` pop frames until
---- one supplies the next effect. The loop never recurses, so chains of any
---- depth are safe. It never mutates an effect table, so one effect can run
---- many times.
+--- frames (specifications/03-run-loop.md §3 and §5). Ops that wait for a
+--- result push themselves as frames, and `Success`, `Failure` and `Sync` pop
+--- frames until one supplies the next effect. The loop never recurses, so
+--- chains of any depth are safe. It never mutates an effect table, so one
+--- effect can run many times.
 ---
 --- Each op's behavior lives in private tables keyed by `_op`: `evaluate`,
 --- `onSuccess`, `onFailure` and `onPop`. A Lua error thrown by user code
@@ -22,7 +22,7 @@ local traceback = debug.traceback
 local EffectMT = core.EffectMT
 local exitSucceed, exitFailCause = core.exitSucceed, core.exitFailCause
 
----The host interface the runtime runs on (FIBER-DESIGN.md §10.1).
+---The host interface the runtime runs on (specifications/10-scheduler.md §10.1).
 ---@class leffect.Scheduler
 ---@field schedule fun(self: leffect.Scheduler, task: fun()) Runs `task` on the next tick, FIFO.
 ---@field after fun(self: leffect.Scheduler, ms: number, task: fun()): fun() Returns a cancel function.
@@ -44,7 +44,7 @@ local exitSucceed, exitFailCause = core.exitSucceed, core.exitFailCause
 ---@field context table<string, any> The services the fiber runs with; never mutated.
 ---@field evaluate fun(self: leffect.FiberState, effect: leffect.Effect)
 
----Internal: the state of one async wait (FIBER-DESIGN.md §6.2).
+---Internal: the state of one async wait (specifications/06-async.md §6.2).
 ---@class leffect.Suspension
 ---@field resumed boolean No further wakeup may happen: the operation or an interrupt won.
 ---@field completed boolean The operation itself called resume.
@@ -199,13 +199,13 @@ local function withoutFails(cause)
   return Cause.fromReasons(kept)
 end
 
--- The skip rule (FIBER-DESIGN.md §5.3, 4.1.5's `exitFailCause`). While the
--- fiber is interruptible and interrupted, recovery handlers don't run, and
--- the cause that unwinds records the fiber's interrupts. If a skipped handler
--- came from a frame (a recovery handler, not a Restore override), the Fail
--- reasons are dropped too. Finalizer frames escape the skip, because their
--- onPop makes the fiber uninterruptible first; so the flag is read only after
--- the first frame is popped.
+-- The skip rule (specifications/03-run-loop.md §5.3, 4.1.5's `exitFailCause`).
+-- While the fiber is interruptible and interrupted, recovery handlers don't
+-- run, and the cause that unwinds records the fiber's interrupts. If a skipped
+-- handler came from a frame (a recovery handler, not a Restore override), the
+-- Fail reasons are dropped too. Finalizer frames escape the skip, because
+-- their onPop makes the fiber uninterruptible first; so the flag is read only
+-- after the first frame is popped.
 evaluate.Failure = function(op, fiber)
   local cause = op.cause
   local handler, frame = nextHandler(fiber, onFailure)
@@ -294,7 +294,7 @@ evaluate.Yield = function(_, fiber)
   return yieldWith(fiber, core.exitVoid)
 end
 
--- Interruptibility (FIBER-DESIGN.md §7.4) -----------------------------------
+-- Interruptibility (specifications/07-interruption.md §7.4) -----------------
 
 -- Restore frames set the interruptible flag back when popped. Restoring to
 -- interruptible while an interrupt is pending delivers it right there.
@@ -384,7 +384,7 @@ function runtime.uninterruptibleMask(body)
   end)
 end
 
--- Finalizers (FIBER-DESIGN.md §7.5) -----------------------------------------
+-- Finalizers (specifications/07-interruption.md §7.5) -----------------------
 
 -- A FinalizerResult frame sits under a running finalizer. When the finalizer
 -- succeeds it returns the original exit; when it fails, it adds the
@@ -434,7 +434,7 @@ onFailure.OnExit = function(frame, cause, fiber)
   return runFinalizer(frame.f, exitFailCause(cause), fiber)
 end
 
--- Async (FIBER-DESIGN.md §6) ------------------------------------------------
+-- Async (specifications/06-async.md §6) -------------------------------------
 
 evaluate.Async = function(op, fiber)
   ---@type leffect.Suspension
@@ -496,7 +496,7 @@ onFailure.AsyncCancel = function(frame, cause, fiber)
   return frame.cancel
 end
 
--- Context (FIBER-DESIGN.md §18) ---------------------------------------------
+-- Context (specifications/18-context.md §18) --------------------------------
 
 -- A SetContext frame puts the previous context back when it is popped. It has
 -- no handlers, so it is transparent on both paths, and onPop runs even for a
@@ -506,7 +506,7 @@ onPop.SetContext = function(frame, fiber)
   return nil
 end
 
--- Gen (FIBER-DESIGN.md §9) --------------------------------------------------
+-- Gen (specifications/09-gen.md §9) -----------------------------------------
 
 local coroutineCreate, coroutineResume, coroutineRunning, coroutineStatus, coroutineYield =
   coroutine.create, coroutine.resume, coroutine.running, coroutine.status, coroutine.yield

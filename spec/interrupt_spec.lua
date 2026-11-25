@@ -1,6 +1,6 @@
--- Interruption (FIBER-DESIGN.md §7) is cooperative. It is delivered only while
--- the fiber is interruptible, recovery handlers never catch it, and
--- finalizers and cancelers always run.
+-- Interruption (specifications/07-interruption.md §7) is cooperative. It is
+-- delivered only while the fiber is interruptible, recovery handlers never
+-- catch it, and finalizers and cancelers always run.
 
 local leffect = require("leffect")
 local Cause = leffect.Cause

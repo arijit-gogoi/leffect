@@ -27,7 +27,7 @@ services/layers. Effect TS's behavior is the reference: when in doubt, match it.
   - Finalizers always run uninterruptibly, and their errors are added to the
     Cause. One exception, as in Effect 4.1.5: when an interrupt skips a
     recovery handler, the Fail reasons are dropped, and only the Die and
-    Interrupt reasons stay (`FIBER-DESIGN.md` §5.3).
+    Interrupt reasons stay (`specifications/03-run-loop.md` §5.3).
   - The runtime never throws into user code. On failure or interrupt, abandon
     the suspended gen coroutine.
 - **Errors:** expected failures are tagged tables (`{ _tag = "NotFound", ... }`).
@@ -43,14 +43,18 @@ services/layers. Effect TS's behavior is the reference: when in doubt, match it.
 
 ```
 src/leffect/
-  init.lua          -- public entry
-  effect.lua        -- constructors + combinators (instruction tables)
+  init.lua          -- public entry: Cause, Effect, Exit, Fiber, Scope, run
+  core.lua          -- effect representation: shared metatable, op names, primitives
+  effect.lua        -- public API: constructors, combinators, runners
   exit.lua
   cause.lua
-  runtime.lua       -- fiber run loop
+  runtime.lua       -- fiber run loop, frames, gen
   fiber.lua
+  context.lua       -- internal: the fiber context (services)
+  scope.lua         -- Scope
   scheduler/test.lua
 spec/               -- busted specs
+specifications/     -- the runtime design, one file per topic
 ```
 
 ## Tooling
@@ -65,8 +69,8 @@ spec/               -- busted specs
 - Effects are data: tables with an `_op` field. Nothing runs until a runtime
   runs it.
 - The run loop is a `while` loop over an explicit stack of frames (the frame
-  protocol in `FIBER-DESIGN.md` §3). Use it from M0 on. The loop must never
-  recurse, so a million chained `flatMap`s must not overflow.
+  protocol in `specifications/03-run-loop.md` §3). Use it from M0 on. The loop
+  must never recurse, so a million chained `flatMap`s must not overflow.
 - Before implementing any feature, write busted specs describing Effect TS's
   behavior in its edge cases (for example, interrupt during acquire, or failure
   inside a finalizer). Then make them pass.
@@ -91,15 +95,16 @@ spec/               -- busted specs
 
 ## Reference
 
-- `FIBER-DESIGN.md`: the runtime design.
-  - Part I covers frames, the run loop, async, interruption delivery,
-    structured concurrency, gen, the scheduler, the invariants and the M1 spec
-    list.
-  - Part II covers M2: the fiber context, Scope, resources, typed catches,
-    `forEach`/`all`, and the M2 spec list.
+- `specifications/`: the runtime design, one file per topic. Its `README.md`
+  holds the status, the reference and the section map.
+  - Part I (files `00`–`16`) covers frames, the run loop, async, interruption
+    delivery, structured concurrency, gen, the scheduler, the invariants and
+    the M1 spec list.
+  - Part II (files `18`–`23`) covers M2: the fiber context, Scope, resources,
+    typed catches, `forEach`/`all`, and the M2 spec list.
 
-  Follow it for M1 and M2. Propose changes to the doc before deviating in
-  code.
+  Follow it for M1 and M2. Propose changes to the specifications before
+  deviating in code.
 - Effect v4's source, pinned to Effect 4.1.5: the `effect@4.1.5` tag of
   `Effect-TS/effect` (commit `e3aca1f`). Read
   `packages/effect/src/internal/effect.ts` and `internal/core.ts` for the run

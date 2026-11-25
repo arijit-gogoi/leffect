@@ -1,6 +1,6 @@
 --- Fibers: lightweight threads of execution. Each fiber runs one effect on a
---- scheduler, with its own stack of frames (FIBER-DESIGN.md §4, §5.1, §7 and
---- §8).
+--- scheduler, with its own stack of frames (specifications/03-run-loop.md §4
+--- and §5.1, 07-interruption.md §7, and 08-structured-concurrency.md §8).
 ---
 --- A fiber publishes its exit only after interrupting and awaiting its
 --- children. Interruption is cooperative: `interruptUnsafe` records the

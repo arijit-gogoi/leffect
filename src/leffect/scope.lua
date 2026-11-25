@@ -1,5 +1,5 @@
 --- Scope: collects finalizers and runs them when it closes
---- (FIBER-DESIGN.md §19, 4.1.5's `Scope` module).
+--- (specifications/19-scope.md §19, 4.1.5's `Scope` module).
 ---
 --- ```lua
 --- local scope = Scope.makeUnsafe()

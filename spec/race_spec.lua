@@ -1,5 +1,6 @@
--- race, raceFirst and timeout (FIBER-DESIGN.md §8.1), as in Effect v4: the
--- losers are interrupted and awaited before the race returns.
+-- race, raceFirst and timeout (specifications/08-structured-concurrency.md
+-- §8.1), as in Effect v4: the losers are interrupted and awaited before the
+-- race returns.
 
 local leffect = require("leffect")
 local Cause = leffect.Cause

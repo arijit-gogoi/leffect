@@ -1,5 +1,6 @@
--- Finalizers (FIBER-DESIGN.md §7.5): onExit, ensuring and onInterrupt run
--- uninterruptibly, and a finalizer's failure is added to the cause.
+-- Finalizers (specifications/07-interruption.md §7.5): onExit, ensuring and
+-- onInterrupt run uninterruptibly, and a finalizer's failure is added to the
+-- cause.
 
 local leffect = require("leffect")
 local Cause = leffect.Cause

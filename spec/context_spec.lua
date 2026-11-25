@@ -1,5 +1,5 @@
--- The fiber context (FIBER-DESIGN.md §18): an immutable table of services,
--- inherited at fork. Until M3 it holds only the current Scope.
+-- The fiber context (specifications/18-context.md §18): an immutable table of
+-- services, inherited at fork. Until M3 it holds only the current Scope.
 
 local leffect = require("leffect")
 local Context = require("leffect.context")

@@ -1,5 +1,6 @@
 -- Fibers: fork, join, await, observers, fairness, structured concurrency,
--- and running effects synchronously (FIBER-DESIGN.md §4, §5, §8 and §8.2).
+-- and running effects synchronously (specifications/03-run-loop.md §4 and §5,
+-- and specifications/08-structured-concurrency.md §8).
 
 local leffect = require("leffect")
 local Cause = leffect.Cause

@@ -1,5 +1,5 @@
---- Internal: a fiber's context, the services it runs with (FIBER-DESIGN.md
---- §18).
+--- Internal: a fiber's context, the services it runs with
+--- (specifications/18-context.md §18).
 ---
 --- A context is an immutable table of services keyed by strings. Adding a
 --- service copies the table, and nothing ever mutates one. A fork starts with

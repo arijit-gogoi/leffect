@@ -1,6 +1,6 @@
--- forEach and all (FIBER-DESIGN.md §22): one item at a time by default, or
--- up to `concurrency` items at once on worker fibers. Results keep input
--- order and carry `n`.
+-- forEach and all (specifications/22-foreach.md §22): one item at a time by
+-- default, or up to `concurrency` items at once on worker fibers. Results keep
+-- input order and carry `n`.
 
 local leffect = require("leffect")
 local Cause = leffect.Cause

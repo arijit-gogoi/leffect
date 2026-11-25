@@ -1,5 +1,5 @@
 --- A scheduler for tests: a FIFO task queue, and a virtual clock that only
---- moves when the test says so (FIBER-DESIGN.md §10.2).
+--- moves when the test says so (specifications/10-scheduler.md §10.2).
 ---
 --- ```lua
 --- local TestScheduler = require("leffect.scheduler.test")

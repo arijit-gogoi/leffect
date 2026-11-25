@@ -1,5 +1,5 @@
 -- Effect.async is a one-shot suspension with an optional canceler
--- (FIBER-DESIGN.md §6). Every wakeup goes through the scheduler.
+-- (specifications/06-async.md §6). Every wakeup goes through the scheduler.
 
 local leffect = require("leffect")
 local Cause = leffect.Cause

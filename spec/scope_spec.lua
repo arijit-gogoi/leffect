@@ -1,5 +1,5 @@
--- Scope (FIBER-DESIGN.md §19): collects finalizers and runs them, newest
--- first and uninterruptibly, when it closes.
+-- Scope (specifications/19-scope.md §19): collects finalizers and runs them,
+-- newest first and uninterruptibly, when it closes.
 
 local leffect = require("leffect")
 local Cause = leffect.Cause

@@ -1,6 +1,6 @@
--- Typed error recovery and Effect.exit (FIBER-DESIGN.md §21). Every typed
--- catch goes through Cause.findRecoverableError, so none of them recovers a
--- defect, an interrupt, or a cause that holds a Die.
+-- Typed error recovery and Effect.exit (specifications/21-typed-errors.md
+-- §21). Every typed catch goes through Cause.findRecoverableError, so none of
+-- them recovers a defect, an interrupt, or a cause that holds a Die.
 
 local leffect = require("leffect")
 local Cause = leffect.Cause

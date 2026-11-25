@@ -1,6 +1,6 @@
--- Effect.gen on coroutines (FIBER-DESIGN.md §9). `run(eff)` yields the effect
--- to the run loop and returns its value. On failure or interrupt the
--- coroutine is abandoned, never resumed and never thrown into.
+-- Effect.gen on coroutines (specifications/09-gen.md §9). `run(eff)` yields
+-- the effect to the run loop and returns its value. On failure or interrupt
+-- the coroutine is abandoned, never resumed and never thrown into.
 
 local leffect = require("leffect")
 local Cause = leffect.Cause

@@ -1,6 +1,6 @@
--- Resources (FIBER-DESIGN.md §20): acquireRelease ties a release to the
--- current scope, acquireUseRelease brackets a use, and forkIn/forkScoped tie
--- a fiber to a scope.
+-- Resources (specifications/20-resources.md §20): acquireRelease ties a
+-- release to the current scope, acquireUseRelease brackets a use, and
+-- forkIn/forkScoped tie a fiber to a scope.
 
 local leffect = require("leffect")
 local Cause = leffect.Cause

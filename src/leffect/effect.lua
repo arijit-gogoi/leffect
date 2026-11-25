@@ -184,12 +184,13 @@ Effect.suspend = core.suspend
 --- An effect built by `f(fiber)` from the fiber running it.
 Effect.withFiber = core.withFiber
 
---- An effect that runs `body(run)` on a coroutine (FIBER-DESIGN.md §9).
---- Inside the body, `run(eff)` runs an effect and returns its value; helper
---- functions can call `require("leffect").run`, which is the same function.
---- The body's first return value is the result. If a `run(eff)` fails or the
---- fiber is interrupted, `run` never returns and the coroutine is abandoned,
---- so clean up with effects (`ensuring`, `acquireRelease`), not `pcall`.
+--- An effect that runs `body(run)` on a coroutine (specifications/09-gen.md
+--- §9). Inside the body, `run(eff)` runs an effect and returns its value;
+--- helper functions can call `require("leffect").run`, which is the same
+--- function. The body's first return value is the result. If a `run(eff)`
+--- fails or the fiber is interrupted, `run` never returns and the coroutine is
+--- abandoned, so clean up with effects (`ensuring`, `acquireRelease`), not
+--- `pcall`.
 Effect.gen = core.gen
 
 --- Replaces the success value with `value`.
@@ -278,7 +279,7 @@ function Effect.onInterrupt(self, f)
   end)
 end
 
--- Scope (FIBER-DESIGN.md §19) -----------------------------------------------
+-- Scope (specifications/19-scope.md §19) ------------------------------------
 
 local push = runtime.push
 local SCOPE_KEY = Scope.contextKey
@@ -343,7 +344,7 @@ function Effect.addFinalizer(f)
   end)
 end
 
--- Resources (FIBER-DESIGN.md §20) -------------------------------------------
+-- Resources (specifications/20-resources.md §20) ----------------------------
 
 --- Acquires a resource with `acquire`, uninterruptibly, and adds
 --- `release(resource, exit)` to the current scope, before any interrupt can
@@ -456,10 +457,10 @@ function Effect.forkScoped(self)
   end)
 end
 
---- Races `effects` on child fibers (FIBER-DESIGN.md §8.1). A winner is the
---- first success, or the first exit if `firstExitWins`. The losers are
---- interrupted and awaited before the race returns. Without a winner, the
---- race fails with every racer's reasons.
+--- Races `effects` on child fibers (specifications/08-structured-concurrency.md
+--- §8.1). A winner is the first success, or the first exit if
+--- `firstExitWins`. The losers are interrupted and awaited before the race
+--- returns. Without a winner, the race fails with every racer's reasons.
 ---@param effects leffect.Effect[]
 ---@param firstExitWins boolean
 ---@return leffect.Effect
@@ -567,7 +568,7 @@ function Effect.timeout(self, ms)
   end)
 end
 
--- forEach and all (FIBER-DESIGN.md §22) -------------------------------------
+-- forEach and all (specifications/22-foreach.md §22) ------------------------
 
 local floor, huge = math.floor, math.huge
 local pairs, sort, type = pairs, table.sort, type
@@ -804,7 +805,7 @@ local function keyOrder(a, b)
 end
 
 --- Runs a table of effects, like `forEach` with the identity. The keys decide
---- what the table is (FIBER-DESIGN.md §22.3):
+--- what the table is (specifications/22-foreach.md §22.3):
 --- - with a number `n`, a list of `n` effects;
 --- - with keys 1 to the number of keys, a list; `{}` gives `{ n = 0 }`;
 --- - otherwise a record: it runs in sorted key order, numbers then strings,
