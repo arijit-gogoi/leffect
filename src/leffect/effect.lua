@@ -329,6 +329,57 @@ function Effect.addFinalizer(f)
   end)
 end
 
+-- Resources (FIBER-DESIGN.md §20) -------------------------------------------
+
+--- Acquires a resource with `acquire`, uninterruptibly, and adds
+--- `release(resource, exit)` to the current scope, before any interrupt can
+--- be delivered. The release runs when the scope closes, with the close exit.
+--- If acquire fails, nothing is released. With `options.interruptible`,
+--- acquire may be interrupted, and then there is nothing to release. Without
+--- a current scope, it dies before acquiring anything.
+---@param acquire leffect.Effect
+---@param release fun(resource: any, exit: leffect.Exit): leffect.Effect?
+---@param options { interruptible: boolean? }?
+---@return leffect.Effect
+function Effect.acquireRelease(acquire, release, options)
+  return runtime.uninterruptibleMask(function(restore)
+    return core.flatMap(Effect.scope, function(scope)
+      local run = acquire
+      if options and options.interruptible then
+        run = restore(acquire)
+      end
+      return core.flatMap(run, function(resource)
+        local added = Scope.addFinalizerExit(scope, function(exit)
+          return release(resource, exit)
+        end)
+        return core.map(added, function()
+          return resource
+        end)
+      end)
+    end)
+  end)
+end
+
+--- Acquires a resource with `acquire`, uninterruptibly, runs `use(resource)`
+--- as interruptibly as the caller, then runs `release(resource, exit)` however
+--- `use` ends. The release's failure is added to the exit. Needs no scope.
+---@param acquire leffect.Effect
+---@param use fun(resource: any): leffect.Effect
+---@param release fun(resource: any, exit: leffect.Exit): leffect.Effect?
+---@return leffect.Effect
+function Effect.acquireUseRelease(acquire, use, release)
+  return runtime.uninterruptibleMask(function(restore)
+    return core.flatMap(acquire, function(resource)
+      local used = core.suspend(function()
+        return restore(use(resource))
+      end)
+      return core.onExit(used, function(exit)
+        return release(resource, exit)
+      end)
+    end)
+  end)
+end
+
 -- Fibers --------------------------------------------------------------------
 
 --- Starts `self` on a child fiber, on the next tick, and succeeds with the
@@ -347,6 +398,47 @@ end
 function Effect.forkDaemon(self)
   return core.withFiber(function(parent)
     return exitSucceed(Fiber.forkUnsafe(parent, self, true, false))
+  end)
+end
+
+--- Starts `self` on a daemon fiber tied to `scope`, on the next tick, and
+--- succeeds with the fiber. Closing the scope interrupts the fiber and waits
+--- for it; a fiber that ends first removes itself from the scope. On a closed
+--- scope, the fiber is interrupted before it starts, so it runs none of
+--- `self`.
+---@param self leffect.Effect
+---@param scope leffect.Scope
+---@return leffect.Effect
+function Effect.forkIn(self, scope)
+  return core.withFiber(function(parent)
+    local fiber = Fiber.forkUnsafe(parent, self, true, false)
+    if scope.state == "closed" then
+      fiber:interruptUnsafe(parent.id)
+    else
+      -- Keyed by the fiber, so that a fiber closing its own scope skips it
+      -- instead of waiting for itself.
+      Scope.addFinalizerUnsafe(scope, fiber, function()
+        return core.withFiber(function(current)
+          if current == fiber then
+            return core.exitVoid
+          end
+          return fiber:interrupt()
+        end)
+      end)
+      fiber:addObserver(function()
+        Scope.removeFinalizerUnsafe(scope, fiber)
+      end)
+    end
+    return exitSucceed(fiber)
+  end)
+end
+
+--- `forkIn` with the current scope. Dies without one.
+---@param self leffect.Effect
+---@return leffect.Effect
+function Effect.forkScoped(self)
+  return core.flatMap(Effect.scope, function(scope)
+    return Effect.forkIn(self, scope)
   end)
 end
 
@@ -591,6 +683,8 @@ methods.onInterrupt = Effect.onInterrupt
 methods.scoped = Effect.scoped
 methods.fork = Effect.fork
 methods.forkDaemon = Effect.forkDaemon
+methods.forkIn = Effect.forkIn
+methods.forkScoped = Effect.forkScoped
 methods.race = Effect.race
 methods.raceFirst = Effect.raceFirst
 methods.timeout = Effect.timeout

@@ -45,6 +45,9 @@
 ---@field interruptible fun(self: leffect.Effect): leffect.Effect
 ---@field fork fun(self: leffect.Effect): leffect.Effect
 ---@field forkDaemon fun(self: leffect.Effect): leffect.Effect
+---@field forkIn fun(self: leffect.Effect, scope: leffect.Scope): leffect.Effect
+---@field forkScoped fun(self: leffect.Effect): leffect.Effect
+---@field scoped fun(self: leffect.Effect): leffect.Effect
 ---@field race fun(self: leffect.Effect, that: leffect.Effect): leffect.Effect
 ---@field raceFirst fun(self: leffect.Effect, that: leffect.Effect): leffect.Effect
 ---@field timeout fun(self: leffect.Effect, ms: number): leffect.Effect
