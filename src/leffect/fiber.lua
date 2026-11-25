@@ -146,15 +146,21 @@ end
 --- Creates a child of `parent` running `effect`, started on the next tick. A
 --- non-daemon child is attached to the parent, which interrupts it before
 --- publishing its own exit. Children start interruptible unless asked
---- otherwise, whatever the parent's state (as in v4), and with the parent's
---- context.
+--- otherwise, whatever the parent's state (as in v4); `"inherit"` copies the
+--- parent's state instead. Every child starts with the parent's context.
 ---@param parent leffect.Fiber
 ---@param effect any
 ---@param daemon boolean?
----@param uninterruptible boolean?
+---@param uninterruptible boolean|"inherit"|nil
 ---@return leffect.Fiber
 function Fiber.forkUnsafe(parent, effect, daemon, uninterruptible)
-  local child = Fiber.new(parent.scheduler, not uninterruptible)
+  local interruptible
+  if uninterruptible == "inherit" then
+    interruptible = parent.interruptible
+  else
+    interruptible = not uninterruptible
+  end
+  local child = Fiber.new(parent.scheduler, interruptible)
   child.context = parent.context
   parent.scheduler:schedule(function()
     child:evaluate(effect)

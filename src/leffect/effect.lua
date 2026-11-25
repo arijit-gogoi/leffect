@@ -11,7 +11,7 @@ local Scope = require("leffect.scope")
 local core = require("leffect.core")
 local runtime = require("leffect.runtime")
 
-local error, setmetatable, time = error, setmetatable, os.time
+local error, setmetatable, time, xpcall = error, setmetatable, os.time, xpcall
 
 local exitSucceed, exitFailCause = core.exitSucceed, core.exitFailCause
 
@@ -550,6 +550,304 @@ end
 function Effect.timeout(self, ms)
   return Effect.timeoutOrElse(self, ms, function()
     return Effect.fail(Cause.TimeoutError())
+  end)
+end
+
+-- forEach and all (FIBER-DESIGN.md §22) -------------------------------------
+
+local floor, huge = math.floor, math.huge
+local pairs, sort, type = pairs, table.sort, type
+local OP_FAILURE = core.OP_FAILURE
+
+--- The most items that may run at once, or nil if `concurrency` is invalid.
+---@param concurrency any
+---@return number?
+local function concurrencyLimit(concurrency)
+  if concurrency == nil then
+    return 1
+  elseif concurrency == "unbounded" then
+    return huge
+  end
+  if type(concurrency) ~= "number" or concurrency ~= concurrency then
+    return nil
+  end
+  if concurrency < 1 then
+    return 1
+  end
+  return floor(concurrency)
+end
+
+--- Runs `f(items[i], i)` for i = 1..count, one after the other, storing each
+--- value in `out` if there is one. A flatMap chain: each step returns the next
+--- from a continuation, so neither stack grows, and `f` is called only when
+--- the item's turn comes.
+---@param items table
+---@param count integer
+---@param f fun(item: any, index: integer): leffect.Effect
+---@param out table?
+---@return leffect.Effect
+local function forEachInTurn(items, count, f, out)
+  local function step(i)
+    if i > count then
+      return exitSucceed(out)
+    end
+    return core.flatMap(f(items[i], i), function(value)
+      if out then
+        out[i] = value
+      end
+      return step(i + 1)
+    end)
+  end
+  return step(1)
+end
+
+--- Runs `f(items[i], i)` on daemon workers, at most `limit` at once, as
+--- 4.1.5's `forEachConcurrent` does. The parent waits in one async:
+--- - each worker's exit stores its value and launches the next item;
+--- - the first failure, or a throw from `f`, stops the launches and
+---   interrupts the running workers in fork order; the run then fails once
+---   they have all exited, with the later workers' non-interrupt reasons
+---   added and the defects elected;
+--- - the canceler handles an interrupt of the parent: it stops the launches,
+---   then interrupts the workers and waits for them.
+---@param items table
+---@param count integer
+---@param f fun(item: any, index: integer): leffect.Effect
+---@param out table?
+---@param limit number
+---@return leffect.Effect
+local function forEachConcurrently(items, count, f, out, limit)
+  return core.withFiber(function(parent)
+    return core.async(function(resume)
+      local workers, launched, running = {}, 0, 0
+      local stopped = false -- no more launches
+      local failure -- the cause the run fails with
+      local resumed = false
+
+      local function addFailure(cause)
+        if failure then
+          failure = Cause.electDefects(Cause.combine(failure, cause))
+        else
+          failure = cause
+        end
+      end
+
+      -- Stops the launches, and interrupts the running workers in fork order.
+      local function stop()
+        stopped = true
+        for i = 1, launched do
+          local worker = workers[i]
+          if not worker.exit then
+            worker:interruptUnsafe(parent.id)
+          end
+        end
+      end
+
+      local function finish()
+        if resumed or running > 0 or not (stopped or launched == count) then
+          return
+        end
+        resumed = true
+        if failure then
+          resume(exitFailCause(failure))
+        else
+          resume(exitSucceed(out))
+        end
+      end
+
+      local launch
+
+      local function onWorkerExit(index, exit)
+        running = running - 1
+        if exit._op == OP_FAILURE then
+          if stopped then
+            local reasons, kept, n = exit.cause.reasons, {}, 0
+            for i = 1, #reasons do
+              if reasons[i]._tag ~= "Interrupt" then
+                n = n + 1
+                kept[n] = reasons[i]
+              end
+            end
+            if n > 0 then
+              addFailure(Cause.fromReasons(kept))
+            end
+          else
+            failure = exit.cause
+            stop()
+          end
+        elseif out then
+          out[index] = exit.value
+        end
+        if not stopped then
+          launch()
+        end
+        finish()
+      end
+
+      local function launchUnprotected()
+        while not stopped and running < limit and launched < count do
+          local index = launched + 1
+          local effect = f(items[index], index)
+          local worker = Fiber.forkUnsafe(parent, effect, true, "inherit")
+          launched = index
+          workers[index] = worker
+          running = running + 1
+          worker:addObserver(function(exit)
+            onWorkerExit(index, exit)
+          end)
+        end
+      end
+
+      -- The one launch path, for the first batch and for the refills. A
+      -- refill runs in a worker's observer, outside any loop, so a throw
+      -- from `f` must not escape: it fails the run like a worker failure.
+      launch = function()
+        local ok, caught = xpcall(launchUnprotected, runtime.captureDefect)
+        if not ok then
+          addFailure(runtime.defectCause(caught))
+          stop()
+        end
+      end
+
+      launch()
+      finish()
+      return core.suspend(function()
+        stopped = true -- before the interrupts, so no worker exit refills
+        local stillRunning = {}
+        for i = 1, launched do
+          local worker = workers[i]
+          if not worker.exit then
+            stillRunning[#stillRunning + 1] = worker
+          end
+        end
+        return core.flatMap(Fiber.interruptAllAs(stillRunning, parent.id), function()
+          if failure then
+            return exitFailCause(failure)
+          end
+          return core.exitVoid
+        end)
+      end)
+    end)
+  end)
+end
+
+---@class leffect.ForEachOptions
+---@field concurrency (number|"unbounded")? How many items may run at once; default 1.
+---@field discard boolean? Succeed with nil instead of the results.
+
+--- Runs `f(item, index)` for each item of `items`, with indexes from 1, and
+--- succeeds with the values in input order: a list with a field `n`, so nil
+--- values count. The length is `items.n` if it is a number, else `#items`.
+--- `f` is called only when the item's turn comes. By default the items run
+--- one at a time, and the first failure stops the run. With a
+--- `concurrency` above 1, or `"unbounded"`, they run on worker fibers; a
+--- failure interrupts the running workers and waits for them. With `discard`,
+--- succeeds with nil.
+---@param items table
+---@param f fun(item: any, index: integer): leffect.Effect
+---@param options leffect.ForEachOptions?
+---@return leffect.Effect
+function Effect.forEach(items, f, options)
+  return core.suspend(function()
+    local concurrency = options and options.concurrency
+    local limit = concurrencyLimit(concurrency)
+    if limit == nil then
+      return exitFailCause(
+        Cause.die(
+          'Effect.forEach: concurrency must be a number or "unbounded", got '
+            .. runtime.describe(concurrency)
+        )
+      )
+    end
+    local count = items.n
+    if type(count) ~= "number" then
+      count = #items
+    end
+    local out
+    if not (options and options.discard) then
+      out = { n = count }
+    end
+    if limit == 1 then
+      return forEachInTurn(items, count, f, out)
+    elseif count == 0 then
+      return exitSucceed(out)
+    end
+    return forEachConcurrently(items, count, f, out, limit)
+  end)
+end
+
+local function identity(value)
+  return value
+end
+
+-- Numbers first, then strings; a number is never compared with a string.
+local function keyOrder(a, b)
+  local ta, tb = type(a), type(b)
+  if ta ~= tb then
+    return ta == "number"
+  end
+  return a < b
+end
+
+--- Runs a table of effects, like `forEach` with the identity. The keys decide
+--- what the table is (FIBER-DESIGN.md §22.3):
+--- - with a number `n`, a list of `n` effects;
+--- - with keys 1 to the number of keys, a list; `{}` gives `{ n = 0 }`;
+--- - otherwise a record: it runs in sorted key order, numbers then strings,
+---   and succeeds with a table with the same keys.
+---@param effects table
+---@param options leffect.ForEachOptions?
+---@return leffect.Effect
+function Effect.all(effects, options)
+  return core.suspend(function()
+    if type(effects) ~= "table" then
+      return exitFailCause(
+        Cause.die("Effect.all: expected a table of effects, got " .. runtime.describe(effects))
+      )
+    end
+    if type(effects.n) == "number" then
+      return Effect.forEach(effects, identity, options)
+    end
+    local keys, count = {}, 0
+    for key in pairs(effects) do
+      count = count + 1
+      keys[count] = key
+    end
+    local isList = true
+    for i = 1, count do
+      if effects[i] == nil then
+        isList = false
+        break
+      end
+    end
+    if isList then
+      return Effect.forEach(effects, identity, options)
+    end
+    for i = 1, count do
+      local kind = type(keys[i])
+      if kind ~= "number" and kind ~= "string" then
+        return exitFailCause(
+          Cause.die(
+            "Effect.all: a record's keys must be numbers or strings, got "
+              .. runtime.describe(keys[i])
+          )
+        )
+      end
+    end
+    sort(keys, keyOrder)
+    local values = Effect.forEach(keys, function(key)
+      return effects[key]
+    end, options)
+    if options and options.discard then
+      return values
+    end
+    return core.map(values, function(list)
+      local record = {}
+      for i = 1, count do
+        record[keys[i]] = list[i]
+      end
+      return record
+    end)
   end)
 end
 

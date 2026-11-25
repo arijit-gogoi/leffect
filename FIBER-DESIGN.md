@@ -1856,8 +1856,11 @@ new files: `spec/gen_spec.lua`, `catch_spec.lua`, `context_spec.lua`,
 - Interrupting the parent interrupts every worker, and waits for them.
 - Inside `uninterruptible`, a failing worker doesn't cut the others short.
 - `f` throws on item 2 of the first batch, with `concurrency` of 2 or more.
-  Item 1's worker is interrupted, and its finalizer runs before `forEach`
-  fails with the Die. A throw during a later refill does the same.
+  Item 1's worker is interrupted before it starts, since forks start on the
+  next tick, so it runs none of its code. `forEach` fails with the Die once
+  that worker has exited, instead of leaving it running.
+- `f` throws during a later refill. The running workers are interrupted, and
+  their finalizers run before `forEach` fails with the Die.
 - An invalid `concurrency` is a defect.
 - `all`:
   - a list gives the values, with `n`;
