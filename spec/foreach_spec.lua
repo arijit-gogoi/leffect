@@ -288,6 +288,7 @@ describe("forEach", function()
   it("dies on an invalid concurrency", function()
     for _, concurrency in ipairs({ "lots", true, 0 / 0 }) do
       local exit = Effect.runSyncExit(Effect.forEach({ 1 }, Effect.succeed, {
+        ---@diagnostic disable-next-line: assign-type-mismatch
         concurrency = concurrency,
       }))
       local reason = h.causeOf(exit).reasons[1]

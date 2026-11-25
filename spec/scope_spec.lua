@@ -276,6 +276,7 @@ describe("Scope", function()
 
   it("makeUnsafe rejects an unknown strategy", function()
     assert.has_error(function()
+      ---@diagnostic disable-next-line: param-type-mismatch
       Scope.makeUnsafe("random")
     end)
   end)

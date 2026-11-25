@@ -16,6 +16,7 @@ describe("Effect.gen", function()
         return 22
       end))
       local none = run(Effect.void)
+      ---@diagnostic disable-next-line: redundant-return-value
       return a + b, none, "ignored"
     end)
     local exit = Effect.runSyncExit(program)
@@ -113,6 +114,7 @@ describe("Effect.gen", function()
 
   it("dies with 'Not a valid effect' when run() gets something else", function()
     local exit = Effect.runSyncExit(Effect.gen(function(run)
+      ---@diagnostic disable-next-line: param-type-mismatch
       run(42)
     end))
     local reason = h.causeOf(exit).reasons[1]
