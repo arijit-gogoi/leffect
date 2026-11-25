@@ -93,5 +93,8 @@ spec/               -- busted specs
   async, interruption delivery, structured concurrency, gen, scheduler,
   invariants, and the M1 spec list). Follow it for M1. Propose changes to the
   doc before deviating in code.
-- Effect v4's source (`Effect-TS/effect-smol`,
-  `packages/effect/src/internal/effect.ts`) for the run loop's structure.
+- Effect v4's source, pinned to Effect 4.1.5: the `effect@4.1.5` tag of
+  `Effect-TS/effect` (commit `e3aca1f`). Read
+  `packages/effect/src/internal/effect.ts` and `internal/core.ts` for the run
+  loop's structure and for the behavior to match. M1 was first written against
+  `Effect-TS/effect-smol` @ `3a1128c` (4.0.0-beta.98), which is now frozen.

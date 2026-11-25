@@ -1,12 +1,20 @@
 
 # Leffect: fiber and interruption design
 
-Status: settled for Milestone M1 on 2026-11-25. It is based on Effect v4's
-runtime (`effect-smol` `main` @ `3a1128c`: `packages/effect/src/internal/effect.ts`
-and `internal/core.ts`, notably `FiberImpl`, `exitFailCause`, `callbackOptions`,
-`setInterruptible`, `onExitPrimitive`, `forkUnsafe`, `raceAll`, `raceFirst` and
-`runSyncExitWith`) and adapted to Lua. §16 lists what the review of the first
-draft changed, including the decisions taken on the user's behalf.
+Status: settled for Milestone M1 on 2026-11-25, and re-pinned the same day.
+
+**Reference:** Effect 4.1.5, which is the `effect@4.1.5` tag of
+`Effect-TS/effect` (commit `e3aca1f`). The files are
+`packages/effect/src/internal/effect.ts` and `internal/core.ts`, notably
+`FiberImpl`, `exitFailCause`, `callbackOptions`, `setInterruptible`,
+`OnExitImpl`, `forkUnsafe`, `raceAll`, `raceFirst` and `runSyncExitWith`.
+
+**History:** M1 was first designed against `effect-smol` @ `3a1128c`
+(4.0.0-beta.98), then adapted to Lua.
+- §16 lists what the review of that draft changed.
+- §17 lists what the re-pin to 4.1.5 changed.
+
+Both list the decisions taken on the user's behalf.
 
 ---
 
@@ -21,8 +29,11 @@ draft changed, including the decisions taken on the user's behalf.
 - **Interruption is a failure with a special rule.** An interrupt is delivered
   by failing the fiber with an `Interrupt` cause. While the fiber is
   interruptible and has been interrupted, recovery handlers are skipped during
-  unwinding. Finalizer frames switch the fiber to uninterruptible when popped,
-  so they always run.
+  unwinding, and the cause that unwinds records the interrupt. Finalizer
+  frames switch the fiber to uninterruptible when popped, so they always run.
+- **A cause with a defect is not recoverable** (4.1.5). When a cause holds both
+  Fail and Die reasons, combining elects the Fails to Dies, and `catchAll`
+  only recovers causes without a Die (§2.1).
 - **Interruptibility is a flag plus restore frames.** `uninterruptible(e)` sets
   the flag and pushes a frame that restores it. Restoring to interruptible while
   an interrupt is pending delivers it right there.
@@ -75,12 +86,29 @@ flat list.
 
 - A Die's `defect` is the thrown value, unchanged. `trace` is the traceback
   captured where the runtime caught it, if it did.
-- `Cause.empty` has no reasons. `Cause.combine(a, b)` appends the reasons of
-  `b` that `a` doesn't already have: the same table, or the same `_tag` with a
-  raw-equal (`==`) payload. An empty cause is the identity. This is v4's
-  `causeCombine`, which merges with `Arr.union` under structural equality.
+- `Cause.empty` has no reasons.
+- `Cause.combine(a, b)`:
+  - If either cause is empty, the other comes back unchanged.
+  - Otherwise the result is `a`'s reasons followed by `b`'s, keeping only the
+    first of each set of equal reasons. Two reasons are equal when they are
+    the same table, or have the same `_tag` and raw-equal (`==`) payloads.
+  - This is 4.1.5's `causeCombine`, which dedupes the concatenation under
+    `Equal`. M1 compared `b`'s reasons only against `a`'s.
 - `Cause.fromReasons(list)` keeps every reason, duplicates included, like v4's
   `causeFromReasons` (used by `raceAll`).
+- `Cause.electDefects(c)` is 4.1.5's `causeElectDefects`:
+  - If `c` has both Fail and Die reasons, each Fail becomes a Die in place.
+    The new Die's `defect` is the error, and it has no `trace`.
+  - Otherwise `c` comes back unchanged.
+  - It applies when a finalizer's or a canceler's cause is combined into a
+    failure (§7.5), to `raceAll`'s all-failed cause (§8.1), and in M2 to
+    `forEach` (§22).
+- `Cause.findRecoverableError(c)` is 4.1.5's `findRecoverableError`. A cause
+  with a defect is not recoverable.
+  - It returns `true, error` for the first Fail, when `c` has no Die.
+  - Otherwise it returns `false, rethrow`, where `rethrow` is
+    `electDefects(c)` if `c` has a Die, else `c`.
+  - `catchAll` uses it, and so do M2's typed catches (§21).
 - Queries: `failures` and `defects` (each returns `list, count`, because a
   value can be nil), `interruptors` (the distinct fiber IDs), `findError`,
   `findDefect`, `hasFails`, `hasDies`, `hasInterrupts`, `hasInterruptsOnly`
@@ -194,7 +222,7 @@ end
 | `OnExit` (finalizer)     | run `f(exit)`, then exit | run `f(exit)`, then combined exit | make uninterruptible, push `Restore(true)` |
 | `Restore(b)`             | —                | —                             | set `interruptible = b`; if `b` and interrupted, override to fail with the interrupt |
 | `AsyncCancel`            | —                | if interrupted and the operation never completed, run the canceler, then re-fail | make uninterruptible, push `Restore(true)` |
-| `FinalizerResult`        | return original exit | fail with `combine(original, c2)` (or `c2` if original succeeded) | — |
+| `FinalizerResult`        | return original exit | fail with `electDefects(combine(original, c2))` (or `c2` if original succeeded) | — |
 | `Gen` (M2)               | resume coroutine | —                             | —                                          |
 
 `OnExit` and `AsyncCancel` only switch to uninterruptible (and push a restore)
@@ -355,25 +383,52 @@ This is the core of interruption semantics:
 
 ```lua
 evaluate.Failure = function(op, fiber)
+  local cause = op.cause
   local h, frame = nextHandler(fiber, onFailure)
+  local interrupted = fiber.interruptCause
   -- While interruptible and interrupted, recovery handlers don't run.
   -- Finalizer frames escape this because their onPop already made the fiber
   -- uninterruptible by the time we get here.
-  while h and fiber.interruptible and fiber.interruptCause do
-    h, frame = nextHandler(fiber, onFailure)
+  if interrupted and fiber.interruptible then
+    local skipped = false
+    while h and fiber.interruptible do
+      skipped = skipped or frame ~= nil -- an override has no frame: not counted
+      h, frame = nextHandler(fiber, onFailure)
+    end
+    if skipped then cause = withoutFails(cause) end -- drop the Fail reasons
+    cause = Cause.combine(cause, interrupted)        -- record the interrupt
   end
   if not h then
-    fiber.finalExit = op
+    fiber.finalExit = cause == op.cause and op or Exit.failCause(cause)
     return DONE
   end
-  return h(frame, op.cause, fiber)
+  return h(frame, cause, fiber)
 end
 ```
 
-This also correctly skips an override from `Restore(true)`. The override fails
-with the interrupt cause, which only re-enters this same path. It is v4's rule
-(`internal/core.ts`, `exitFailCause`): v4 skips the handlers, but doesn't
-strip failures from the cause.
+This is 4.1.5's rule (`internal/core.ts`, `exitFailCause`). The skip itself is
+M1's, and the two changes to the cause are new with the re-pin (§17):
+
+- **The interrupt is recorded.** The fiber's interrupt reasons are added to the
+  cause that unwinds. Take a fiber interrupted inside an uninterruptible region
+  that then fails: it now ends with the failure and the Interrupt, not with the
+  failure alone.
+- **Typed failures are dropped when a recovery handler is skipped.** A skipped
+  `catchCause`-family frame would have handled the Fail reasons, so they leave
+  the cause and the interrupt stands alone. Defects stay.
+
+  Example: a finalizer that fails with `Fail` during an interrupt keeps its
+  reason only if no recovery handler is skipped later. This conflicts with
+  CLAUDE.md's "finalizer errors are added to the Cause", and needs the user's
+  confirmation (§17, decision 19).
+
+An override from `Restore(true)` comes without a frame. It is skipped like any
+handler, but it doesn't count as a recovery handler; v4's restore
+continuations likewise carry no `identifier`.
+
+Finalizer frames are popped while the fiber is uninterruptible, so they are
+never skipped and never counted. In practice, the skipped frames that count are
+`OnFailure` frames.
 
 ---
 
@@ -580,10 +635,13 @@ end
 - `onInterrupt(f)` is an `onExit` that runs `f(interruptors)` when the exit's
   cause has any Interrupt reason. `interruptors` is the list of distinct
   interruptor IDs. v4 does the same, through `causeFilterInterruptors`.
-- A failing finalizer adds its cause and never replaces the original. If the
-  body succeeded and the finalizer failed, the result is a failure with the
-  finalizer's cause. This deviates from v4 (§14), where a finalizer's failure
-  replaces the cause; CLAUDE.md requires adding it.
+- A failing finalizer adds its cause and never replaces the original.
+  - `FinalizerResult` fails with `electDefects(combine(original, c2))`.
+  - If the body succeeded and the finalizer failed, the result is the
+    finalizer's cause, unchanged.
+  - 4.1.5 does the same (`combineFinalizerCause`); beta.98 replaced the cause.
+  - With §5.3, a Fail added during an interrupt is dropped later if a recovery
+    handler is skipped.
 
 ### 7.6 Worked trace: timeout interrupts a sleeping fiber with cleanup
 
@@ -658,7 +716,7 @@ local function raceWith(effects, firstExitWins)
       --   a winner (a success, or any exit when firstExitWins):
       --     resume(uninterruptible(interruptAll(stillRunning)):flatMap(→ exit))
       --   otherwise: collect its reasons; once every racer is done,
-      --     resume(failCause(Cause.fromReasons(reasons)))
+      --     resume(failCause(Cause.electDefects(Cause.fromReasons(reasons))))
       return suspend(function() return interruptAll(stillRunning()) end) -- canceler
     end)
   end)
@@ -669,6 +727,13 @@ end
   interrupts every racer still running, and waits for them.
 - Losers are interrupted and awaited, uninterruptibly, before the race
   returns.
+- When every racer fails, the cause keeps all their reasons in order,
+  duplicates included, with defects elected (4.1.5). So a racer that fails and
+  a racer that dies give two Dies.
+- 4.1.5 restructured `raceAll`. Losers are interrupted as soon as the race is
+  won, and an exit frame on the racing fiber awaits them. What you can observe
+  is the same as M1: the losers are awaited before the race returns. So M1's
+  structure stays.
 - `race(a, b)` is `raceAll({a, b})`. `raceFirst(a, b)` races `{a, b}` with
   `firstExitWins`.
 - `timeoutOrElse(eff, ms, orElse)` is `raceFirst(eff, sleep(ms):flatMap(orElse))`.
@@ -851,9 +916,12 @@ Each of these becomes at least one spec.
    the same `s.resumed` flag.
 3. **Delivery only while interruptible**, at the points in §7.2.
 4. **The skip rule:** while interruptible and interrupted, recovery handlers
-   never run. Finalizers and cancelers always run, and always uninterruptibly.
+   never run, and the cause that unwinds carries the fiber's interrupts.
+   Finalizers and cancelers always run, and always uninterruptibly.
 5. **Finalizer and canceler failures add to the cause** and never replace it,
-   even when a finalizer function throws.
+   even when a finalizer function throws. Defects are elected when the result
+   holds both Fail and Die reasons. A Fail added during an interrupt is
+   dropped if a recovery handler is skipped later (§5.3, decision 19).
 6. **A canceler runs only if its operation never completed.**
 7. **Children first:** a fiber's exit is published only after all its
    non-daemon children have exited.
@@ -867,6 +935,8 @@ Each of these becomes at least one spec.
 12. **Fairness:** no fiber runs more than `maxOpsBeforeYield` steps without
     yielding.
 13. **Effects are values:** the loop never mutates an effect table.
+14. **A cause with a Die is never recovered** by `catchAll`, nor by M2's typed
+    catches (4.1.5).
 
 ---
 
@@ -875,7 +945,8 @@ Each of these becomes at least one spec.
 Write these before the code, in `spec/scheduler_spec.lua`,
 `spec/fiber_spec.lua`, `spec/async_spec.lua`, `spec/interrupt_spec.lua`,
 `spec/finalizer_spec.lua` and `spec/race_spec.lua`. M0's specs move to the
-flat Cause and the `trace` field, and keep passing.
+flat Cause and the `trace` field, and keep passing. The re-pin to 4.1.5 changes
+some outcomes; §17 lists the specs it adds and amends.
 
 **Test scheduler**
 - `flush` runs tasks in FIFO order, including tasks queued while flushing,
@@ -1021,17 +1092,23 @@ flat Cause and the `trace` field, and keep passing.
 | Running-fiber interrupt | Restarts the loop through `evaluate` | `pendingInterrupt`, checked at each loop step | Follows from the row above. One boolean check per step. |
 | Resume racing an interrupt | Can't happen: resume is synchronous | `s.completed` keeps the canceler from running on an operation that already completed | Follows from the first row. |
 | Canceler type | `Effect` (or an `AbortSignal`) | Function, Effect, or nil | Lua has no AbortSignal; plain functions are the common case. |
-| Finalizer and canceler failures | `onExitPrimitive` and `asyncFinalizer` flatMap the finalizer, so its failure replaces the cause | Added to the cause through `FinalizerResult`, even when a finalizer function throws | CLAUDE.md: finalizer errors are added to the Cause. |
 | Invalid effect | The loop returns `Die` at once, skipping the remaining frames | The Die unwinds through the frames | Finalizers still run (an M0 decision). |
 | Op dispatch | Symbol-keyed functions on each primitive | Private tables keyed by `_op`, and one shared metatable | Lua has no symbols; this keeps the protocol out of the user method namespace. |
 | Children shutdown | An `interruptChildren` middleware wraps the exit | Same idea, run explicitly uninterruptibly, in fork order | Spelled out so an interrupt during shutdown can't strand children. |
 | `runFork` start | Evaluates the fiber immediately | Starts it on the next tick | The wakeup rule, and deterministic tests. |
 | Unfinished `runSync` | Returns `Die(AsyncFiberError)` and leaves the fiber running | Interrupts the fiber and flushes again first, then returns the same Die | A private sync scheduler never runs again, so the fiber's finalizers would never run. |
 
-Everything else follows v4: frames, `onPop`/`contAll`, the skip rule, restore
-frames, async cancel frames, abandoning generators, the flat Cause and its
-`combine`, `onInterrupt`'s condition, `race` and `timeout`, and the 2048-op
-budget.
+Everything else follows 4.1.5:
+- frames and `onPop`/`contAll`;
+- the skip rule, including how it handles interrupts and Fails;
+- restore frames and async cancel frames;
+- abandoning generators;
+- the flat Cause, its `combine` and defect election;
+- finalizer and canceler failures combined into the cause (beta.98 replaced
+  the cause; that was a deviation until the re-pin, §17);
+- `onInterrupt`'s condition;
+- `race` and `timeout`;
+- the 2048-op budget.
 
 ---
 
@@ -1104,3 +1181,82 @@ The first draft was checked against v4's source (`effect-smol` `main` @
     returns `Die(AsyncFiberError)` (§8.2, §14).
 18. Children are interrupted in fork order, and cancelers' failures combine
     like finalizers' (§5.1, §6.3).
+
+---
+
+## 17. What the re-pin to 4.1.5 changed (2026-11-25)
+
+The user chose to re-pin the reference from `effect-smol` beta.98 to Effect
+4.1.5. These changes between the two versions touch M1's semantics. Each one
+comes with M1's observed output, from scripts run on Lua 5.4 and LuaJIT at
+commit `30f4563`.
+
+1. **Defect election** (§2.1, §7.5).
+   - Example: `fail("e"):ensuring(die("d")):catchAll(h)`.
+   - M1 runs `h` and ends with `Success(caught e)`, so the defect is lost
+     without a trace.
+   - 4.1.5 fails with `[Die(e), Die(d)]`, and `h` never runs.
+2. **The skip rule records the interrupt** (§5.3).
+   - Example: a fiber interrupted inside
+     `uninterruptible(sleep(10):flatMap(→ fail("x")))`.
+   - M1 ends with `[Fail(x)]`, so the interrupt is lost.
+   - 4.1.5 ends with `[Fail(x), Interrupt]`.
+3. **The skip rule drops Fails when it skips a recovery handler** (§5.3).
+   - Change 2's example under a `catchAll`: M1 ends with `[Fail(x)]`, 4.1.5
+     with `[Interrupt]`.
+   - `never:ensuring(fail("cleanup")):catchAll(h)`, interrupted: M1 ends with
+     `[Interrupt, Fail(cleanup)]`, 4.1.5 with `[Interrupt]`.
+   - Without the `catchAll`, both give `[Interrupt, Fail(cleanup)]`.
+4. **`combine` dedupes the whole concatenation** (§2.1). M1 compared only
+   `b`'s reasons against `a`'s.
+5. **`raceAll`'s all-failed cause elects defects** (§8.1).
+6. **Finalizer and canceler failures.** 4.1.5 now combines them with the
+   original cause, as M1 already did. §14 drops that row.
+
+These are unchanged between beta.98 and 4.1.5, so M1 still matches them:
+- interruptibility masks;
+- `timeout` and `timeoutOrElse`;
+- `onInterrupt`;
+- the async resume and cancel protocol;
+- `runSyncExit`;
+- children shutdown;
+- the op budget.
+
+**Specs for the re-pin.** These amend `spec/cause_spec.lua`,
+`effect_spec.lua`, `finalizer_spec.lua`, `interrupt_spec.lua` and
+`race_spec.lua`.
+- `electDefects`:
+  - Fail and Die together become all Dies, in place.
+  - A cause with only Fails, only Dies, or only interrupts comes back
+    unchanged.
+- `findRecoverableError`:
+  - With no Die, it returns the first error.
+  - With a Die, it returns `false` and the elected cause.
+  - With neither a Fail nor a Die, it returns `false` and the cause.
+- When both causes are non-empty, `combine` also drops repeats within `a`.
+- `fail(e):ensuring(die(d)):catchAll(h)`: `h` doesn't run, and the exit is
+  `[Die(e), Die(d)]`.
+- A finalizer that fails after a failure keeps both Fails. One that dies after
+  a failure elects the Fail.
+- `raceAll` with one racer that fails and one that dies fails with two Dies.
+- Interrupted inside `uninterruptible(...)`, which then fails: the exit has
+  the failure and the Interrupt.
+- The same under a `catchAll`: the handler doesn't run, and the exit is the
+  Interrupt alone.
+- `never:ensuring(fail("cleanup")):catchAll(h)`, interrupted:
+  - the exit is the Interrupt alone;
+  - without the `catchAll`, it is `[Interrupt, Fail(cleanup)]`.
+- A finalizer that dies during an interrupt keeps its Die, even when a
+  `catchAll` is skipped.
+
+**Decisions taken on the user's behalf**
+
+19. **Dropping Fails (change 3) follows 4.1.5.** It conflicts with CLAUDE.md's
+    "finalizer errors are added to the Cause": a finalizer's Fail during an
+    interrupt is lost if a recovery handler is skipped later. Dies are always
+    kept. This stays unsettled until the user confirms it, and CLAUDE.md is
+    unchanged. The alternative is to record only the interrupt and keep the
+    Fails, as M1 does: a deviation from 4.1.5, to be added to §14.
+20. **The pin is the release tag** (`e3aca1f`), not `main` (`296c209` on
+    2026-11-24). `main` changes `forkUnsafe` and `catchReasons` after the
+    release, and neither affects Leffect.
