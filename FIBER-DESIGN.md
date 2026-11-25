@@ -2,6 +2,7 @@
 # Leffect: fiber and interruption design
 
 Status: settled for Milestone M1 on 2026-11-25, and re-pinned the same day.
+The M2 design (Part II, §18–§25) was drafted on 2026-11-25 and awaits review.
 
 **Reference:** Effect 4.1.5, which is the `effect@4.1.5` tag of
 `Effect-TS/effect` (commit `e3aca1f`). The files are
@@ -48,7 +49,14 @@ Both list the decisions taken on the user's behalf.
   interrupting and awaiting all its children.
 - **`gen` on stackful coroutines, in M2.** `run(eff)` yields a marked effect to
   the run loop. On failure or interrupt the coroutine is abandoned, never
-  thrown into. §9 designs it now, so that M1's frames can host it.
+  thrown into (§9).
+- **M2 adds a minimal fiber context, Scope and bounded concurrency.**
+  - The context holds the current Scope until M3 brings Context and Layer
+    (§18).
+  - A Scope runs its finalizers in reverse order (§19).
+  - `acquireRelease` registers the release before an interrupt can land (§20).
+  - `forEach` and `all` run under a concurrency limit and keep input order
+    (§22).
 
 ---
 
@@ -64,6 +72,26 @@ yielding, and the entry points `runFork`, `runSync` and `runSyncExit`.
 §9), Scope (M2), Context/Layer/FiberRef (M3), an Option type (so no
 `timeoutOption` yet), tracing and stack annotations, scheduler priorities,
 real-host adapters other than test (luv comes in M3).
+
+**Goals for M2:**
+- `gen`;
+- `catchIf`, `catchTag`, `catchTags` and `Effect.exit`;
+- a minimal fiber context;
+- Scope, with `scoped`, `addFinalizer`, `forkIn` and `forkScoped`;
+- `acquireRelease` and `acquireUseRelease`;
+- `forEach` and `all` with concurrency limits;
+- the re-pin's changes to M1 semantics (§17).
+
+`race` was done in M1. v4's `raceAll` has no concurrency option, so the limits
+in CLAUDE.md's M2 line apply to `forEach` and `all`.
+
+**Non-goals for M2:**
+- Context, Tag, Layer and FiberRef (M3);
+- a Result type, so `all` has no `mode: "result"`;
+- `Effect.fn`;
+- v4's `catchReason` and `catchReasons`;
+- the `match` family;
+- structural equality.
 
 ---
 
@@ -161,8 +189,8 @@ plain method names would share the `__index` namespace with the user methods.
 
 Ops that push themselves as frames carry their own handlers, which avoids
 allocating a separate frame (v4 does the same). Internal frames (`Restore`,
-`AsyncCancel`, `FinalizerResult`, and `Gen` in M2) are plain tables with a
-private `_op`; they are never evaluated as effects. Ops with per-run state
+`AsyncCancel`, `FinalizerResult`, and in M2 `Gen` and `SetContext`) are plain
+tables with a private `_op`; they are never evaluated as effects. Ops with per-run state
 (`Async`, `Gen`) push a fresh frame table on each evaluation, because an
 effect value can run many times, concurrently. The loop never mutates an
 effect table.
@@ -224,6 +252,7 @@ end
 | `AsyncCancel`            | —                | if interrupted and the operation never completed, run the canceler, then re-fail | make uninterruptible, push `Restore(true)` |
 | `FinalizerResult`        | return original exit | fail with `electDefects(combine(original, c2))` (or `c2` if original succeeded) | — |
 | `Gen` (M2)               | resume coroutine | —                             | —                                          |
+| `SetContext` (M2)        | —                | —                             | set `fiber.context` back to `frame.context` (§18) |
 
 `OnExit` and `AsyncCancel` only switch to uninterruptible (and push a restore)
 if the fiber is currently interruptible. Otherwise they leave the state alone.
@@ -248,6 +277,7 @@ if the fiber is currently interruptible. Otherwise they leave the state alone.
 ---@field children table<Fiber, true>?
 ---@field scheduler Scheduler
 ---@field opCount integer            -- steps since the fiber last yielded
+---@field context table              -- M2: immutable services, inherited at fork (§18)
 ```
 
 Fiber IDs are monotonically increasing integers, shared by every runtime in
@@ -671,8 +701,16 @@ been queued, its resume would be ignored because s.resumed is true.
 ## 8. Children and structured concurrency
 
 ```lua
+-- uninterruptible: true, false (the default) or, from M2, "inherit"
 function forkUnsafe(parent, eff, daemon, uninterruptible)
-  local child = Fiber.new(parent.scheduler, not uninterruptible)
+  local interruptible
+  if uninterruptible == "inherit" then
+    interruptible = parent.interruptible
+  else
+    interruptible = not uninterruptible
+  end
+  local child = Fiber.new(parent.scheduler, interruptible)
+  child.context = parent.context -- M2: children see the parent's services (§18)
   parent.scheduler:schedule(function() child:evaluate(eff) end)
   if not daemon then
     parent.children = parent.children or {}
@@ -684,11 +722,12 @@ end
 ```
 
 - Children start interruptible whatever the parent's state, as with v4's
-  `forkUnsafe`, whose `uninterruptible` option defaults to false.
+  `forkUnsafe`, whose `uninterruptible` option defaults to false. In M2,
+  `"inherit"` copies the parent's state; `forEach` workers use it (§22).
 - `Effect.fork(eff)` attaches the child to the current fiber and starts it on
   the next tick.
 - `forkDaemon` doesn't attach it.
-- `forkScoped` attaches it to a Scope (M2).
+- `forkIn` and `forkScoped` tie it to a Scope instead (M2, §20.3).
 - `fiber:await()` is `async(function(resume) ... end)`: if the fiber is
   already done, resume immediately. Otherwise `addObserver(resume ∘ succeed)`
   and return the observer-removal function as the canceler, so interrupting an
@@ -788,13 +827,17 @@ local program = Effect.gen(function(run)
 end)
 ```
 
+`Leffect.run` is `require("leffect").run`: the same function the body gets as
+`run`. `Effect.gen(body)` builds `{ _op = "Gen", body = body }`, and `core`
+gets `OP_GEN`.
+
 ### 9.2 Mechanics
 
 ```lua
 local MARK = {} -- unique sentinel
 local genCoroutines = setmetatable({}, { __mode = "k" })
 
-function Leffect.run(eff)
+local function run(eff) -- exported as Leffect.run
   if not genCoroutines[coroutine.running()] then
     error("Leffect.run() called outside Effect.gen", 2)
   end
@@ -802,16 +845,26 @@ function Leffect.run(eff)
 end
 
 evaluate.Gen = function(op, fiber)
-  local co = coroutine.create(op.body)
+  local co = coroutine.create(op.body) -- a fresh coroutine on every run
   genCoroutines[co] = true
   local frame = { _op = "Gen", co = co }
-  return onSuccess.Gen(frame, Leffect.run, fiber) -- first resume passes `run`
+  return onSuccess.Gen(frame, run, fiber) -- the first resume passes `run`
 end
 
 onSuccess.Gen = function(frame, value, fiber)
   local co = frame.co
   local ok, a, b = coroutine.resume(co, value)
-  if not ok then return Exit.die(a, debug.traceback(co, tostring(a))) end
+  if not ok then
+    -- traceback(co, msg) reads the dead coroutine's stack on 5.4 and LuaJIT
+    -- (checked on both). Give it a string, as captureDefect does (§5.2).
+    local trace
+    if type(a) == "string" then
+      trace = debug.traceback(co, a)
+    else
+      trace = debug.traceback(co, ""):sub(2) -- drop the leading newline
+    end
+    return Exit.die(a, trace) -- the defect stays the raw error
+  end
   if coroutine.status(co) == "dead" then return Exit.succeed(a) end -- returned
   if a ~= MARK then
     return Exit.die("Effect.gen: coroutine yielded without run(); "
@@ -843,9 +896,19 @@ end
   Document it.
 - **`run()` doesn't work inside the user's own coroutines.** The
   `genCoroutines` registry check catches this with a clear error.
-- **Errors in the gen body** become `Die`, with a traceback taken from the
-  dead coroutine (`debug.traceback(co, msg)` works after an error on 5.4 and
-  LuaJIT).
+- **Errors in the gen body** become a `Die` holding the raw error, with a
+  traceback taken from the dead coroutine.
+  - `debug.traceback(co, msg)` after an error includes the body's line on 5.4
+    and on LuaJIT. Both were checked on 2026-11-25.
+  - A string message comes back prefixed to the trace; `""` gives a leading
+    newline.
+- **Each run starts a fresh coroutine**, so one gen effect can run many times,
+  concurrently (invariant 13).
+- **The body's first return value is the result.** Returning an effect returns
+  it as a plain value, without running it, as v4 does.
+- **`run(x)` with a non-effect** dies with "Not a valid effect", like any
+  other instruction (§5.2). The Gen frame is already pushed, so the Die
+  unwinds through it and the coroutine is abandoned.
 
 ---
 
@@ -937,6 +1000,16 @@ Each of these becomes at least one spec.
 13. **Effects are values:** the loop never mutates an effect table.
 14. **A cause with a Die is never recovered** by `catchAll`, nor by M2's typed
     catches (4.1.5).
+15. **Context changes are undone on every exit path** (M2). `SetContext`
+    frames restore the context in `onPop`, which runs even for skipped frames
+    (§18).
+16. **A Scope runs each finalizer once** (M2): newest first, uninterruptibly,
+    and a failing finalizer doesn't stop the rest (§19).
+17. **`acquireRelease` registers the release exactly when acquire succeeds**
+    (M2), before any interrupt can be delivered (§20).
+18. **`forEach` keeps input order** (M2). It never runs more than
+    `concurrency` items at once, and it returns only after every worker it
+    started has exited (§22).
 
 ---
 
@@ -1046,17 +1119,7 @@ some outcomes; §17 lists the specs it adds and amends.
 - M0's 1e6-op specs keep passing through `runSync`, which now runs them on a
   fiber that yields every 2048 ops.
 
-**For M2 (`gen`)**
-- Values flow through `run()`; the return value is the result.
-- A failing `run()` never returns: code after it doesn't execute, and a
-  `pcall` around it doesn't catch it.
-- A Lua error in the body becomes `Die` with a traceback containing the body's
-  line number.
-- A raw `coroutine.yield` inside gen becomes a defect.
-- `Leffect.run` called outside gen raises a clear error.
-- An interrupt during `run(sleep(...))` abandons the coroutine and runs the
-  `ensuring` added outside.
-- A gen body that calls `run()` 1e5 times in a loop doesn't overflow.
+**For M2**: the `gen` specs moved to §23.
 
 ---
 
@@ -1097,6 +1160,16 @@ some outcomes; §17 lists the specs it adds and amends.
 | Children shutdown | An `interruptChildren` middleware wraps the exit | Same idea, run explicitly uninterruptibly, in fork order | Spelled out so an interrupt during shutdown can't strand children. |
 | `runFork` start | Evaluates the fiber immediately | Starts it on the next tick | The wakeup rule, and deterministic tests. |
 | Unfinished `runSync` | Returns `Die(AsyncFiberError)` and leaves the fiber running | Interrupts the fiber and flushes again first, then returns the same Die | A private sync scheduler never runs again, so the fiber's finalizers would never run. |
+| `gen` (M2) | `yield*` inside a generator | `run(eff)` inside a coroutine; helpers call `Leffect.run` | Lua has no generators (§9). |
+| `catchAll` name (M2) | Renamed `catch` | Keeps M0's `catchAll` | CLAUDE.md's M0 API. |
+| Context (M2) | A `Context` of services, with Tags and Layers | A string-keyed table that holds only the Scope until M3 | M3 owns Context, Tag and Layer (§18). |
+| Release context (M2) | `release` runs with the context captured at acquire | It runs with the closing fiber's context | The context holds only the Scope in M2; revisit in M3 (§15). |
+| Finalizer callbacks (M2) | `release` and `addFinalizer`'s function return an Effect | They may also return nil | Matches `onExit` (§7.5). |
+| `forkIn` options (M2) | `startImmediately`, `uninterruptible` | None | Forks start on the next tick (first row); M1's `fork` takes no options either. |
+| Indexes (M2) | `f(a, i)` with `i` from 0 | `i` from 1 | Lua convention. |
+| Result lists (M2) | Arrays | Lists with a field `n`, like `table.pack` | Results can be nil, and `#` can't count past a hole. |
+| `all` input (M2) | An iterable or a record, told apart by type; a record runs in insertion order | Told apart by keys; a record runs in sorted key order (§22.3) | A Lua table is both. `pairs` order is unspecified, and differs between runtimes. |
+| `all` options (M2) | `mode`, `"default"` or `"result"` | No `mode` | No Result type yet (§15). |
 
 Everything else follows 4.1.5:
 - frames and `onPop`/`contAll`;
@@ -1108,7 +1181,10 @@ Everything else follows 4.1.5:
   the cause; that was a deviation until the re-pin, §17);
 - `onInterrupt`'s condition;
 - `race` and `timeout`;
-- the 2048-op budget.
+- the 2048-op budget;
+- in M2: Scope's states and close order, `scoped`, `acquireRelease`,
+  `acquireUseRelease`, `forkIn`, the typed catches, and how `forEach` handles
+  failures.
 
 ---
 
@@ -1127,6 +1203,15 @@ Everything else follows 4.1.5:
 - **Coroutine cleanup (M2):** whether to `coroutine.close` abandoned gen
   coroutines on 5.4. It isn't needed for correctness (no `<close>` variables in
   the common subset). Leave it out unless memory profiling says otherwise.
+- **Release context (M3):** run `release` with the context captured at
+  acquire, as v4 does, once the context holds more than the Scope.
+- **A Result type:** it would give `all` its `mode: "result"`, plus
+  `Effect.result`.
+- **A loop op for `forEach`:** v4 uses a `While` primitive. The `flatMap`
+  chain of §22.2 is stack-safe, but allocates a frame and a closure per item.
+  Add the op only if a benchmark asks for it.
+- **Structural equality:** `combine` dedupes with `==`. Structural dedupe
+  waits for Equal/Hash ("Later" in CLAUDE.md).
 
 ---
 
@@ -1260,3 +1345,562 @@ These are unchanged between beta.98 and 4.1.5, so M1 still matches them:
 20. **The pin is the release tag** (`e3aca1f`), not `main` (`296c209` on
     2026-11-24). `main` changes `forkUnsafe` and `catchReasons` after the
     release, and neither affects Leffect.
+
+---
+
+# Part II: M2
+
+Part II designs M2 on top of Part I's frames and fibers. It follows 4.1.5. §14
+lists the deviations, and §25 the decisions taken on the user's behalf.
+
+## 18. Fiber context
+
+v4 keeps a fiber's services in `fiber.context`. A fork starts with its
+parent's context, and `scoped` puts its Scope there. Context, Tag and Layer
+are M3. M2 needs only the current Scope, so it adds the field and the frame
+that restores it, but no public Context API.
+
+- **The table.** `fiber.context` is an immutable table of services keyed by
+  strings, like v4's service keys. M2 uses one key, `"leffect/Scope"`.
+  - Adding a service copies the table; nothing mutates a context.
+  - The internal module `leffect.context` has `empty`,
+    `add(ctx, key, value)` and `get(ctx, key)`.
+- **Inheritance.** Root fibers start with `empty`. `forkUnsafe` hands the
+  child the parent's table (§8), so every fork, daemon or not, sees the
+  parent's Scope.
+- **The `SetContext` frame**, `{ _op = "SetContext", context = prev }`, puts
+  `prev` back in its `onPop`.
+  - It has no handlers, so it is transparent on both paths.
+  - `onPop` runs for every popped frame, skipped or not, so the context comes
+    back on every exit path (invariant 15).
+
+Push the frame and change the context in the same `withFiber` step:
+
+```lua
+local function provideService(key, value, eff)
+  return withFiber(function(fiber)
+    local prev = fiber.context
+    push(fiber, { _op = "SetContext", context = prev })
+    fiber.context = Context.add(prev, key, value)
+    return eff
+  end)
+end
+```
+
+Building the restore as an effect instead, as in `onExit(eff, restore)`, opens
+a gap:
+- It leaves a loop step between `withFiber` and the frame's push.
+- A pending interrupt replaces the current effect at that step (§5.2 (a)).
+- The frame is then never pushed, and the changed context leaks into the outer
+  continuation.
+
+v4 closes the same gap with `onExitUnsafe`, which pushes onto the stack
+directly.
+
+## 19. Scope
+
+A Scope collects finalizers and runs them when it closes. This follows v4's
+`Scope` module. The public module is `leffect.scope`, exported as `Scope`.
+
+### 19.1 Data
+
+```lua
+---@class Scope
+---@field strategy "sequential"|"parallel"
+---@field parent Scope?   -- set for a scope made by Scope.fork
+---@field state "open"|"closed"
+---@field exit Exit?      -- the exit it was closed with
+-- and an ordered set of finalizers fn(exit) -> Effect?, each under a key
+```
+
+- **Keys** are tables: a fresh `{}` for `addFinalizer`, the child scope for
+  `Scope.fork`, and the fiber for `forkIn`. A key lets the owner remove its
+  finalizer early.
+- **Adding** appends.
+- **Removing** is O(1) and leaves a hole, which closing skips. Compact the list
+  when holes outnumber entries. Removing from a closed scope does nothing:
+  a `forkIn` fiber that its scope's close interrupts removes itself from a
+  scope that is already closed.
+
+### 19.2 API
+
+| Function | Semantics |
+|---|---|
+| `Scope.make(strategy?)` | Effect: a new open scope. `strategy` defaults to `"sequential"`. |
+| `Scope.makeUnsafe(strategy?)` | The same, outside an effect. |
+| `Scope.addFinalizerExit(scope, f)` | Effect: add `f(exit)`. On a closed scope, run `f(scope.exit)` at once instead. |
+| `Scope.addFinalizer(scope, eff)` | `addFinalizerExit` with a finalizer that ignores the exit. |
+| `Scope.close(scope, exit)` | Effect: close `scope` with `exit`, uninterruptibly (§19.3). A closed scope stays as it is. |
+| `Scope.fork(scope, strategy?)` | Effect: a child scope that closes when `scope` closes. Forking a closed scope gives a closed child with the same exit. |
+| `Scope.provide(eff, scope)` | Runs `eff` with `scope` as the current scope, without closing it. |
+| `Scope.use(eff, scope)` | `provide`, then close `scope` with `eff`'s exit. Below the cut line (§24). |
+| `Effect.scope` | Effect: the current scope. Without one, it dies with "Effect.scope: no Scope in context; wrap the effect in Effect.scoped". |
+| `Effect.scoped(eff)` | Runs `eff` with a fresh current scope, then closes it with `eff`'s exit (§19.4). Also a method. |
+| `Effect.scopedWith(f)` | Runs `f(scope)` with a fresh scope passed as an argument, not put in the context, then closes it. Below the cut line. |
+| `Effect.addFinalizer(f)` | Adds `f(exit)` to the current scope (§20.3). |
+
+### 19.3 Closing
+
+```lua
+function Scope.close(scope, exit)
+  return withFiber(function(fiber)
+    enterUninterruptible(fiber) -- pushes Restore(true) if interruptible
+    return closeUnsafe(scope, exit) or Exit.void
+  end)
+end
+
+-- Returns the effect that runs the finalizers, or nil if there are none.
+local function closeUnsafe(scope, exit)
+  if scope.state == "closed" then return nil end
+  scope.state, scope.exit = "closed", exit
+  if scope.parent then removeFinalizer(scope.parent, scope) end
+  local finalizers = newestFirst(scope)
+  if #finalizers == 0 then return nil end
+  if scope.strategy == "sequential" then
+    return runInTurn(finalizers, exit)
+  end
+  return runTogether(finalizers, exit) -- "parallel"
+end
+```
+
+- **Order.** Finalizers run newest first, and each gets the close exit.
+- **Isolation.** Each finalizer runs as `Effect.exit(suspend(→ f(exit) or
+  void))`. A failure or a throw doesn't stop the next one, and a throw becomes
+  a Die with a traceback (§5.2).
+- **Result.** The close fails with every finalizer's reasons, in run order and
+  duplicates included, or else succeeds. This is v4's `exitAsVoidAll`.
+- **Stack.** `runInTurn` is a `flatMap` chain, like §22.2's, so a scope with
+  many finalizers doesn't grow the stack.
+- **`runTogether`** (below the cut line):
+  - It forks each finalizer on the closing fiber, as a daemon that inherits
+    the closing fiber's interruptibility, so the forks are uninterruptible.
+  - It awaits them all, and combines their exits in fork order.
+  - It skips the finalizer whose key is the closing fiber. That is the fiber's
+    own `forkIn` finalizer, which would wait for the closing fiber and
+    deadlock. v4 skips it too.
+
+### 19.4 `scoped`
+
+```lua
+function Effect.scoped(eff)
+  return withFiber(function(fiber)
+    local prev = fiber.context
+    local scope = Scope.makeUnsafe()
+    push(fiber, { _op = "OnExit", f = function(exit) return closeUnsafe(scope, exit) end })
+    push(fiber, { _op = "SetContext", context = prev })
+    fiber.context = Context.add(prev, "leffect/Scope", scope)
+    return eff
+  end)
+end
+```
+
+- Both frames are pushed directly, for the reason §18 gives.
+- Unwinding pops `SetContext` first, so the finalizers run in the outer
+  context. v4's `scoped` likewise restores the context, then closes.
+- The `OnExit` frame runs the close uninterruptibly, and adds its failure to
+  the exit (§7.5).
+- `Scope.provide(eff, scope)` is §18's `provideService` with the Scope key.
+- `scopedWith(f)` is `suspend(→ onExit(f(scope), → closeUnsafe(scope, exit)))`
+  on a fresh scope. It leaves the context alone, so its frame can be an
+  ordinary effect: if an interrupt lands first, the scope is still empty.
+- `Scope.use(eff, scope)` is
+  `onExit(Scope.provide(eff, scope), → closeUnsafe(scope, exit))`.
+
+## 20. Resources
+
+### 20.1 `acquireRelease`
+
+```lua
+function Effect.acquireRelease(acquire, release, options)
+  return uninterruptibleMask(function(restore)
+    return Effect.scope:flatMap(function(scope)
+      local run = acquire
+      if options and options.interruptible then run = restore(acquire) end
+      return run:flatMap(function(a)
+        return Scope.addFinalizerExit(scope, function(exit)
+          return release(a, exit)
+        end):as(a)
+      end)
+    end)
+  end)
+end
+```
+
+- The scope is looked up before acquire runs. Without one, nothing is
+  acquired.
+- **Interrupt during acquire** (CLAUDE.md's example):
+  - acquire runs uninterruptibly, and the release is added before the mask
+    ends.
+  - The interrupt is delivered when the mask ends.
+  - The scope then closes, and the release runs.
+- `{ interruptible = true }` runs acquire under `restore`. An interrupt can
+  then stop it, and there is nothing to release.
+- If acquire fails, no release is added.
+- The release gets the resource and the scope's close exit. It runs
+  uninterruptibly (§19.3), and its failure is added to the cause through the
+  `OnExit` of `scoped` (§7.5).
+- v4 also runs the release with the context captured at acquire. In M2 the
+  context holds only the Scope, so that waits for M3 (§15).
+
+### 20.2 `acquireUseRelease`
+
+```lua
+function Effect.acquireUseRelease(acquire, use, release)
+  return uninterruptibleMask(function(restore)
+    return acquire:flatMap(function(a)
+      return Effect.suspend(function() return restore(use(a)) end)
+        :onExit(function(exit) return release(a, exit) end)
+    end)
+  end)
+end
+```
+
+This needs no Scope:
+- acquire runs uninterruptibly;
+- `use` runs as interruptibly as the caller;
+- the release always runs, and its failure is added to the cause.
+
+### 20.3 `addFinalizer`, `forkIn` and `forkScoped`
+
+- `Effect.addFinalizer(f)` is
+  `Effect.scope:flatMap(→ Scope.addFinalizerExit(scope, f))`.
+- `Effect.forkIn(eff, scope)` forks `eff` as a daemon, tied to `scope`.
+  - Closing the scope interrupts the fiber and waits for it.
+  - A fiber that finishes first removes its finalizer.
+  - On a closed scope, the fiber is interrupted before it starts, so it runs
+    none of `eff` (§7.2).
+
+  ```lua
+  function Effect.forkIn(eff, scope)
+    return withFiber(function(parent)
+      local fiber = Fiber.forkUnsafe(parent, eff, true) -- a daemon
+      if scope.state == "closed" then
+        fiber:interruptUnsafe(parent.id)
+      else
+        addFinalizerUnsafe(scope, fiber, function()
+          return withFiber(function(current)
+            if current == fiber then return Exit.void end -- closing itself
+            return fiber:interrupt()
+          end)
+        end)
+        fiber:addObserver(function() removeFinalizer(scope, fiber) end)
+      end
+      return Exit.succeed(fiber)
+    end)
+  end
+  ```
+
+- `Effect.forkScoped(eff)` is `Effect.scope:flatMap(→ forkIn(eff, scope))`.
+- Both are also methods. Unlike v4's, they take no options (§14).
+- For a closed scope, v4 creates the fiber unstarted and interrupts it at
+  once. Leffect starts every fork on the next tick, and an interrupt requested
+  before then is delivered at the fiber's first step.
+
+## 21. Typed error recovery and `Effect.exit`
+
+Expected failures are tagged tables (CLAUDE.md). These functions recover them
+by tag or by predicate. All of them go through `Cause.findRecoverableError`
+(§2.1), so they never recover a cause that holds a Die, and they never see
+interrupts.
+
+```lua
+function Effect.catchIf(self, predicate, f, orElse)
+  return catchCause(self, function(cause)
+    local found, value = Cause.findRecoverableError(cause)
+    if not found then return Exit.failCause(value) end -- the cause to rethrow
+    if predicate(value) then return f(value) end
+    if orElse then return orElse(value) end
+    return Exit.failCause(cause)
+  end)
+end
+```
+
+| Function | Recovers |
+|---|---|
+| `catchAll(self, f)` | Any recoverable error: `catchIf` with a predicate that is always true. v4 calls it `catch`. |
+| `catchIf(self, predicate, f, orElse?)` | Errors for which `predicate(err)` is true. Other errors go to `orElse(err)` if it is given, and otherwise keep failing. |
+| `catchTag(self, tag, f, orElse?)` | Errors whose `_tag` is `tag`, or is in `tag` when `tag` is a list. |
+| `catchTags(self, cases, orElse?)` | Errors whose `_tag` has a handler in `cases`, as in `{ NotFound = function(e) ... end }`. |
+
+- The tag test is `type(e) == "table" and e._tag == tag`.
+  - It reads `_tag` with normal indexing, so errors built from metatable
+    classes match.
+  - Strings, numbers, booleans and nil never match, and the test never raises.
+- `catchTags` looks up `cases[e._tag]` only when `e._tag` is a string. A tag
+  with no case falls to `orElse`, or keeps failing.
+- `eff:catchIf`, `eff:catchTag` and `eff:catchTags` are methods too.
+
+`Effect.exit(self)` succeeds with `self`'s exit. It is
+`catchCause(map(self, Exit.succeed), → succeed(Exit.failCause(cause)))`.
+- It is a recovery handler, so it doesn't run while its own fiber is
+  interrupted and interruptible.
+- It is also a method, `eff:exit()`.
+- Scope uses it (§19.3), so it lives in `core`, which `leffect.scope` can
+  require without a cycle.
+
+## 22. `forEach` and `all`
+
+### 22.1 API
+
+```lua
+Effect.forEach(list, f, options) -- f(item, index) returns an effect
+Effect.all(effects, options)     -- a list or a record of effects
+-- options: { concurrency = n or "unbounded", discard = boolean }
+```
+
+- `concurrency`:
+  - nil or 1 runs one item at a time, which is v4's default;
+  - a number runs at most that many at once, and anything below 1 counts
+    as 1;
+  - `"unbounded"` runs them all at once;
+  - anything else is a defect.
+
+  4.1.5 has no `"inherit"`.
+- The result is a list with a field `n`, like `table.pack`, so nil results
+  are counted. With `discard = true`, the result is nil.
+- `f` gets the item and its index, counting from 1. It is called only when
+  that item's turn comes.
+- The input list's length is `list.n` if that is a number, else `#list`.
+
+### 22.2 Running
+
+**One at a time** uses a `flatMap` chain:
+
+```lua
+local function inTurn(items, n, f, out)
+  local function step(i)
+    if i > n then return Exit.succeed(out) end
+    return f(items[i], i):flatMap(function(value)
+      if out then out[i] = value end
+      return step(i + 1)
+    end)
+  end
+  return step(1)
+end
+-- wrapped in suspend, so each run gets a fresh `out`
+```
+
+Each step returns the next effect from a continuation, so neither the frame
+stack nor the Lua stack grows; M0's stack-safety argument covers it. The first
+failure ends the chain, and later items never start.
+
+**Concurrently**, the parent suspends in one `async`, as `raceAll` does
+(§8.1):
+
+- **Launching.** Fork workers until `concurrency` are running.
+  - They are daemons, forked with `uninterruptible = "inherit"` (4.1.5), so
+    inside an uninterruptible region they are uninterruptible too.
+  - A worker's exit launches the next item. That happens in an observer,
+    outside the loop, so `f` runs under `xpcall` there. A throw becomes a Die
+    that ends the run like a failure.
+- **Results.** A success stores its value at its own index, so the results
+  keep input order whatever order the workers finish in.
+- **Failure** (4.1.5's `iterateConcurrent`):
+  - The first failure stops new launches. It interrupts the running workers
+    on behalf of the parent, in fork order.
+  - The run resumes only once every worker has exited.
+  - A later worker's failure adds its non-interrupt reasons to the cause, with
+    defects elected.
+- **End.** When no worker is running and no item is left, the run resumes
+  with the failure, or with the results.
+- **The canceler** handles an interrupt of the parent:
+  - it stops launching;
+  - it interrupts every running worker and waits for them;
+  - then it fails with any failure already recorded, which §6.3's
+    `FinalizerResult` adds to the interrupt.
+- **Ticks.** Workers start on the next tick (§14), so even an item that
+  finishes at once takes a tick.
+
+### 22.3 `all`
+
+`all` is `forEach` over the effects, with `f` the identity. A Lua table can be
+both a list and a record, so its keys decide which it is:
+
+1. If `type(t.n) == "number"`, it is a list of `t.n` effects.
+2. If every key is an integer from 1 to the number of keys, it is a list. So
+   `{}` is an empty list, and gives `{ n = 0 }`.
+3. Otherwise it is a record, and the result has the same keys.
+   - It runs in sorted key order: numbers ascending, then strings ascending.
+     `pairs` order isn't specified, and differs between the runtimes, so
+     sorting makes runs the same on both.
+   - A key of any other type is a defect.
+
+`discard`, `concurrency` and failures work as in `forEach`.
+
+## 23. Specs for M2
+
+Write these before the code. First, §17's specs for the re-pin. The rest go in
+new files: `spec/gen_spec.lua`, `catch_spec.lua`, `context_spec.lua`,
+`scope_spec.lua`, `resource_spec.lua` and `foreach_spec.lua`.
+
+**gen** (moved here from §12)
+- Values flow through `run()`; the body's first return value is the result.
+- A failing `run()` never returns: code after it doesn't execute, and a
+  `pcall` around it doesn't catch it.
+- A Lua error in the body becomes a `Die` holding the raw error, with a
+  traceback that contains the body's line number on both runtimes. A thrown
+  table stays the defect.
+- A raw `coroutine.yield` inside gen becomes a defect.
+- `Leffect.run` raises a clear error when called outside gen, and when called
+  from a user coroutine inside the body.
+- `run(x)` with a non-effect dies with "Not a valid effect".
+- A helper function called by the body can call `Leffect.run`.
+- An interrupt during `run(sleep(...))` abandons the coroutine, and runs the
+  `ensuring` added outside.
+- Running one gen effect twice runs the body twice, from the start.
+- Nested gens work.
+- A gen body may return an effect, which comes back as a plain value.
+- A gen body that calls `run()` 1e5 times in a loop doesn't overflow.
+
+**Typed catches and `exit`**
+- `catchTag`:
+  - it recovers a matching `_tag`, and passes the error to the handler;
+  - a list of tags works;
+  - other errors keep failing, or go to `orElse`.
+- Errors that aren't tables (a string, a number, nil) never match, and never
+  raise.
+- An error whose `_tag` comes from a metatable class matches.
+- `catchTags` dispatches on `_tag`. A tag with no case keeps failing, or goes
+  to `orElse`.
+- `catchIf` follows its predicate.
+- None of them recover a defect, an interrupt, or a cause that holds a Die.
+- `Effect.exit` succeeds with the exit, for a success, a failure and a
+  defect.
+
+**Context**
+- A fiber forked inside `scoped` sees the same scope, daemon or not.
+- After a nested `scoped` ends, by success, failure or interrupt,
+  `Effect.scope` sees the outer scope again.
+- A scope's finalizers run in the outer context: inside one, `Effect.scope`
+  is the outer scope.
+- When the body of a nested `scoped` is interrupted at its first step, the
+  inner scope still closes, and a finalizer outside it sees the outer scope.
+
+**Scope**
+- Finalizers run newest first, each with the close exit.
+- Closing twice runs them once.
+- Adding to a closed scope runs the finalizer at once, with the close exit.
+- A failing or throwing finalizer doesn't stop the others. The close fails
+  with all their reasons, in run order.
+- Closing is uninterruptible: interrupting the closing fiber doesn't cut a
+  sleeping finalizer short.
+- A forked scope:
+  - it closes with its parent, at its own position;
+  - closed first, it detaches, and the parent doesn't close it again;
+  - forking a closed scope gives a closed scope.
+- `Effect.scope` outside `scoped` dies with §19.2's message.
+- `Scope.provide` doesn't close the scope.
+- A scope with 1e5 finalizers closes without overflowing.
+- Below the cut line:
+  - `"parallel"` runs finalizers at the same time (two 100 ms finalizers end
+    at 100 ms), and combines their exits;
+  - `scopedWith` passes the scope, and closes it;
+  - `Scope.use` closes the scope with the effect's exit.
+
+**Resources**
+- `acquireRelease`:
+  - the release runs when the scope closes, with the resource and the exit;
+  - a failed acquire releases nothing;
+  - an interrupt during acquire lets acquire finish, then the release runs,
+    and the exit is the interrupt;
+  - with `interruptible = true`, an interrupt stops acquire, and nothing is
+    released;
+  - resources are released in reverse order of acquisition;
+  - a failing release is added to the cause.
+- `acquireUseRelease`:
+  - the release runs after `use` succeeds, fails or is interrupted;
+  - `use` is interruptible, and acquire isn't.
+- `addFinalizer` gets the exit.
+- `forkScoped`: closing the scope interrupts the fiber, and waits for it. A
+  fiber that ended earlier leaves no finalizer behind.
+- `forkIn` on a closed scope gives an interrupted fiber that ran none of its
+  code.
+
+**forEach and all**
+- One at a time by default:
+  - `f` runs in order, only when the item's turn comes;
+  - the results keep order, and carry `n`.
+- The first failure stops the run: later items never start.
+- 1e5 items, one at a time, don't overflow.
+- Shape of the result:
+  - nil results count in `n`;
+  - `discard` returns nil;
+  - an empty list gives `{ n = 0 }`;
+  - `f` gets indexes that count from 1;
+  - `list.n` sets the length.
+- `concurrency = 2` never runs more than two at once. The results keep input
+  order when items finish out of order. `"unbounded"` starts them all at once.
+- A failure:
+  - interrupts the running workers, and waits for their finalizers before
+    failing;
+  - a second worker's non-interrupt failure is added, with defects elected.
+- Interrupting the parent interrupts every worker, and waits for them.
+- Inside `uninterruptible`, a failing worker doesn't cut the others short.
+- `f` throwing ends the run with a Die, and interrupts the running workers.
+- An invalid `concurrency` is a defect.
+- `all`:
+  - a list gives the values, with `n`;
+  - a record gives the same keys, and runs in sorted key order;
+  - `t.n` marks a list;
+  - `discard` and `concurrency` work.
+
+## 24. Implementation order for M2
+
+These make M2 done:
+
+1. **The re-pin** (§17):
+   - `Cause.electDefects`, `findRecoverableError` and the new `combine`;
+   - defect election in `FinalizerResult` and `raceAll`;
+   - the skip rule's handling of interrupts and Fails (§5.3);
+   - `catchAll` on `findRecoverableError`;
+   - updates to the M1 specs these change.
+
+   Dropping Fails waits for the user's answer on decision 19.
+2. `Effect.exit`, `catchIf`, `catchTag` and `catchTags`.
+3. `gen` (§9).
+4. The context: `leffect.context`, `fiber.context`, inheritance in
+   `forkUnsafe`, and the `SetContext` frame.
+5. Scope, sequential only:
+   - `Scope.make`, `makeUnsafe`, `addFinalizer`, `addFinalizerExit`, `close`,
+     `fork` and `provide`;
+   - `Effect.scope`, `scoped` and `addFinalizer`.
+6. `acquireRelease`, `acquireUseRelease`, `forkIn` and `forkScoped`.
+7. `forkUnsafe`'s `"inherit"`, then `forEach` (one at a time, then
+   concurrently), then `all`.
+
+Below the cut line, built last or deferred:
+
+8. The `"parallel"` finalizer strategy.
+9. `Effect.scopedWith` and `Scope.use`.
+
+**Modules.**
+- `leffect.context` is new and internal.
+- `leffect.scope` is new and public, exported from `init.lua` as `Scope`.
+- `core` gets `OP_GEN` and `exit`.
+- `runtime` gets the `Gen` op and the `SetContext` frame.
+- `leffect.effect` gets the rest.
+- `init.lua` also exports `run` (§9).
+- Every new module goes into the rockspec's `build.modules`.
+
+## 25. M2 decisions taken on the user's behalf (2026-11-25)
+
+The user picked option (a), a minimal fiber context for the Scope, and asked
+for this design. These were decided here; veto any of them.
+
+21. **The context** is an immutable table keyed by strings, and internal until
+    M3. Only `"leffect/Scope"` exists (§18).
+22. **Context and scope frames are pushed directly** inside `withFiber`, never
+    built as effects (§18, §19.4).
+23. **`Leffect.run`** is `require("leffect").run`, the same function the gen
+    body gets (§9).
+24. **Lists from `forEach` and `all` carry `n`.** Indexes count from 1, and
+    `all` sorts a record's keys (§22).
+25. **`catchAll` keeps its name.** `catchIf`, `catchTag` and `catchTags` take
+    an optional `orElse`, as in v4 (§21).
+26. **Finalizer callbacks may return nil**, as `onExit`'s can (§14).
+27. **`forkIn` and `forkScoped` take no options**, and their forks start on the
+    next tick (§20.3).
+28. **Running the release in the acquire-time context waits for M3** (§15).
+29. **The cut line** (§24): the parallel strategy, `scopedWith` and
+    `Scope.use` come last.
+30. **`Effect.exit` is public**, and Scope uses it too (§21).

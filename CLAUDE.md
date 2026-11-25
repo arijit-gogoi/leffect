@@ -89,10 +89,15 @@ spec/               -- busted specs
 
 ## Reference
 
-- `FIBER-DESIGN.md`: the fiber and interruption design (frames, run loop,
-  async, interruption delivery, structured concurrency, gen, scheduler,
-  invariants, and the M1 spec list). Follow it for M1. Propose changes to the
-  doc before deviating in code.
+- `FIBER-DESIGN.md`: the runtime design.
+  - Part I covers frames, the run loop, async, interruption delivery,
+    structured concurrency, gen, the scheduler, the invariants and the M1 spec
+    list.
+  - Part II covers M2: the fiber context, Scope, resources, typed catches,
+    `forEach`/`all`, and the M2 spec list.
+
+  Follow it for M1 and M2. Propose changes to the doc before deviating in
+  code.
 - Effect v4's source, pinned to Effect 4.1.5: the `effect@4.1.5` tag of
   `Effect-TS/effect` (commit `e3aca1f`). Read
   `packages/effect/src/internal/effect.ts` and `internal/core.ts` for the run
