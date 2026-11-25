@@ -20,6 +20,7 @@
 ---| "WithFiber"
 ---| "Async"
 ---| "Yield"
+---| "Gen"
 
 ---A canceler: a function or an effect, run when an async operation is
 ---interrupted.
@@ -70,6 +71,7 @@
 ---@field first leffect.Instruction
 ---@field f fun(arg: any, ...): any
 ---@field register fun(resume: fun(effect: leffect.Effect)): leffect.Canceler?
+---@field body fun(run: fun(effect: leffect.Effect): any): any
 
 local getmetatable, setmetatable = getmetatable, setmetatable
 
@@ -86,6 +88,7 @@ core.OP_ON_EXIT = "OnExit" -- { first, f }: finalizer, f(exit) returns an effect
 core.OP_WITH_FIBER = "WithFiber" -- { f }: f(fiber) is the next effect
 core.OP_ASYNC = "Async" -- { register }: register(resume) returns a canceler or nil
 core.OP_YIELD = "Yield" -- {}: lets other fibers run, then succeeds with nil
+core.OP_GEN = "Gen" -- { body }: runs body(run) on a fresh coroutine
 
 core.methods = {}
 
@@ -179,6 +182,12 @@ end
 
 --- Lets the other fibers run, then succeeds with nil.
 core.yieldNow = setmetatable({ _op = core.OP_YIELD }, EffectMT)
+
+---@param body fun(run: fun(effect: leffect.Effect): any): any
+---@return leffect.Effect
+function core.gen(body)
+  return setmetatable({ _op = core.OP_GEN, body = body }, EffectMT)
+end
 
 local function noop() end
 

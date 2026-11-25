@@ -182,6 +182,14 @@ Effect.suspend = core.suspend
 --- An effect built by `f(fiber)` from the fiber running it.
 Effect.withFiber = core.withFiber
 
+--- An effect that runs `body(run)` on a coroutine (FIBER-DESIGN.md §9).
+--- Inside the body, `run(eff)` runs an effect and returns its value; helper
+--- functions can call `require("leffect").run`, which is the same function.
+--- The body's first return value is the result. If a `run(eff)` fails or the
+--- fiber is interrupted, `run` never returns and the coroutine is abandoned,
+--- so clean up with effects (`ensuring`, `acquireRelease`), not `pcall`.
+Effect.gen = core.gen
+
 --- Replaces the success value with `value`.
 ---@param self leffect.Effect
 ---@param value any

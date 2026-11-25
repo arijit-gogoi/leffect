@@ -495,6 +495,74 @@ onFailure.AsyncCancel = function(frame, cause, fiber)
   return frame.cancel
 end
 
+-- Gen (FIBER-DESIGN.md §9) --------------------------------------------------
+
+local coroutineCreate, coroutineResume, coroutineRunning, coroutineStatus, coroutineYield =
+  coroutine.create, coroutine.resume, coroutine.running, coroutine.status, coroutine.yield
+
+--- Marks what a gen coroutine yields through `run`.
+local MARK = setmetatable({}, { __name = "leffect.GenMark" })
+
+--- The coroutines the run loop created for gen bodies. The keys are weak, so
+--- an abandoned coroutine is collected.
+local genCoroutines = setmetatable({}, { __mode = "k" })
+
+--- Runs `effect` from an `Effect.gen` body and returns its success value. If
+--- the effect fails, or the fiber is interrupted, it never returns: the
+--- coroutine is abandoned. Raises an error outside a gen body, including in a
+--- coroutine of the user's own.
+---@param effect leffect.Effect
+---@return any
+function runtime.run(effect)
+  local co = coroutineRunning()
+  if co == nil or not genCoroutines[co] then
+    error("Leffect.run() called outside Effect.gen", 2)
+  end
+  return coroutineYield(MARK, effect)
+end
+
+local run = runtime.run
+
+-- Resumes the body with the value of the effect it ran. A Gen frame has no
+-- onFailure: when a run() fails, the frame is popped and dropped, and the
+-- coroutine is abandoned.
+onSuccess.Gen = function(frame, value, fiber)
+  ---@cast frame -nil
+  local co = frame.co
+  local ok, a, b = coroutineResume(co, value)
+  if not ok then
+    -- traceback(co, ...) reads the dead coroutine's stack on 5.4 and LuaJIT.
+    local trace
+    if type(a) == "string" then
+      trace = traceback(co, a)
+    else
+      trace = traceback(co, ""):sub(2)
+    end
+    return exitFailCause(Cause.die(a, trace))
+  end
+  if coroutineStatus(co) == "dead" then
+    return exitSucceed(a)
+  end
+  if a ~= MARK then
+    return exitFailCause(
+      Cause.die(
+        "Effect.gen: coroutine yielded without run(); "
+          .. "don't call coroutine.yield directly inside gen"
+      )
+    )
+  end
+  push(fiber, frame)
+  return b
+end
+
+-- Each run gets a fresh coroutine, so one gen effect can run many times, on
+-- many fibers. The first resume passes `run` to the body.
+evaluate.Gen = function(op, fiber)
+  local co = coroutineCreate(op.body)
+  genCoroutines[co] = true
+  return onSuccess.Gen({ _op = "Gen", co = co }, run, fiber)
+end
+
 ---@param fiber leffect.FiberState
 ---@param cur any
 ---@return leffect.Exit|table exit The exit, or YIELD if the fiber suspended.

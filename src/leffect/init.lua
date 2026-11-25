@@ -8,6 +8,12 @@
 ---   :map(function(n) return n + 1 end)
 ---   :flatMap(function(n) return Effect.succeed(n * 2) end)
 --- print(Effect.runSync(answer)) --> 42
+---
+--- local program = Effect.gen(function(run)
+---   local n = run(answer)
+---   return n + 1
+--- end)
+--- print(Effect.runSync(program)) --> 43
 --- ```
 ---
 --- Fibers run on a scheduler; `leffect.scheduler.test` is a virtual-clock
@@ -18,4 +24,7 @@ return {
   Effect = require("leffect.effect"),
   Exit = require("leffect.exit"),
   Fiber = require("leffect.fiber"),
+  --- Runs an effect from an `Effect.gen` body; the same function the body
+  --- gets as its argument.
+  run = require("leffect.runtime").run,
 }
