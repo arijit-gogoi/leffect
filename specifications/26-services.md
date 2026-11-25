@@ -107,9 +107,13 @@ local LogLevel = Context.Reference("app/LogLevel", {
 
 - A Reference is a key with a `defaultValue`. Looking it up in a context
   without it gives the default instead of failing.
-- The default is computed the first time a lookup needs it. It is then cached
-  on the Reference, so every fiber and context shares it (`getDefaultValue`,
-  Context.ts 1091).
+- The default is computed the first time a lookup needs it. It is then cached,
+  so every fiber and context shares it.
+  - v4 caches it on the Reference itself (`getDefaultValue`, Context.ts 1091).
+    Leffect can't: a Reference is an effect, and the loop never mutates an
+    effect table (invariant 13).
+  - So the cache is a private table with weak keys, keyed by Reference. It
+    stores each value in a box, so a nil default is computed only once too.
 - If `defaultValue` throws, nothing is cached. The lookup dies with the error
   and its traceback, and the next lookup calls `defaultValue` again.
 - The default may be nil. A provided value may not (§26.1).
@@ -173,6 +177,10 @@ end
 - `updateContext` lives in `leffect.context`, so `leffect.scope` can use it
   without requiring `leffect.effect`. `Scope.provide(eff, scope)` becomes
   `provideService(eff, Scope.Scope, scope)`.
+- `updateServiceScoped` is the one exception to invariant 15. It changes the
+  fiber's context without pushing a `SetContext` frame, so the change outlasts
+  the call. The finalizer it adds to the scope puts the original back, as in
+  v4.
 - `Scope.Scope` is the key of the current scope, `"leffect/Scope"`, as in v4.
   It replaces M2's `Scope.contextKey` string. `Effect.scope` keeps M2's error
   message (§19.2). `run(Scope.Scope)` outside a scope dies with the generic
@@ -209,8 +217,10 @@ end
   `Effect.addFinalizer` or `acquireRelease`, `Effect.scope` is therefore the
   scope the finalizer belongs to, which is now closed. It is not the outer
   scope.
-  - This changes an approved M2 spec: "inside one, `Effect.scope` is the outer
-    scope" (§23, `spec/context_spec.lua` line 153).
+  - This changes the outcome of one approved M2 spec: "inside one,
+    `Effect.scope` is the outer scope" (§23, `spec/context_spec.lua` line
+    153). No other M2 spec reads the context inside a finalizer or a
+    release.
 - The raw functions `Scope.addFinalizer` and `Scope.addFinalizerExit` capture
   nothing, in v4 as here. Their finalizers run in the context of the fiber
   that closes the scope. `scoped` has already restored the outer context by

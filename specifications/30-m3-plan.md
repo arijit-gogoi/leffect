@@ -6,8 +6,24 @@ Part III (M3) of the [Leffect specifications](README.md).
 
 Write these before the code. They go in new files: `spec/service_spec.lua`,
 `layer_spec.lua`, `luv_scheduler_spec.lua` and `luv_live_spec.lua`. The
-runner specs extend `spec/runtime_spec.lua`. One M2 spec in
-`spec/context_spec.lua` changes (see "The release context").
+runner specs extend `spec/runtime_spec.lua`.
+
+Two kinds of M2 spec change, all in `spec/context_spec.lua`:
+- **One outcome flips:** the spec at line 153 (see "The release context").
+- **Six specs are restated.** The `Context` block at the top of the file tests
+  M2's internal API: string keys, `Context.empty` as a table, and
+  `Context.provide`. M3 replaces that API (§26). The six specs keep their
+  behaviors, restated with keys, `Context.empty()` and `provideService`:
+  - adding copies;
+  - a root fiber starts empty;
+  - every fork inherits the context;
+  - and `provide` sets a service for its effect only, and puts the previous
+    context back after a failure and on interrupt.
+
+  One detail changes: `Context.get` on a missing key returned nil in M2, and
+  now raises (§26.1).
+
+No spec uses `Scope.contextKey`, so removing it changes no spec.
 
 **Context values**
 - `make` then `get` gives the service. `add` leaves the original context
@@ -18,7 +34,8 @@ runner specs extend `spec/runtime_spec.lua`. One M2 spec in
   `getOrElse` calls `orElse` instead.
 - A missing Reference gives its default. `defaultValue` is called once, across
   contexts and fibers. A provided value wins over the default. A default may
-  be nil.
+  be nil, and is computed only once too. The Reference table itself is never
+  changed.
 - If `defaultValue` throws, the lookup dies with the error, and the next
   lookup calls `defaultValue` again.
 - A nil service raises in `make` and `add`, and makes `provideService` die.
@@ -124,7 +141,10 @@ runner specs extend `spec/runtime_spec.lua`. One M2 spec in
 - Called before the fiber starts, the interruptor stops it before any of its
   code runs. Called after the fiber has ended, it does nothing.
 - Without `onExit`, the effect still runs.
-- With `uninterruptible = true`, the interruptor doesn't stop the effect.
+- With `uninterruptible = true`, the interruptor doesn't stop an effect that
+  has no interruptible region. The fiber ends with the effect's own exit. (The
+  runtime already works this way: an interrupt is delivered only while the
+  fiber is interruptible, §7.2.)
 - `onFiberStart` gets the fiber before `runFork` returns.
 - `runFork` and `runCallback` raise when `scheduler` is missing.
 - Below the cut line: the root fibers of `runForkWith(ctx)`,
@@ -174,7 +194,8 @@ These make M3 done:
    `leffect.context`, then `provideService`, `provideServiceEffect`,
    `updateService`, `context`, `contextWith`, `provideContext`, and the
    methods.
-3. **The release context** (§26.5), with the amended M2 spec.
+3. **The release context** (§26.5), with the amended M2 spec. (The six
+   restated `Context` specs go with step 1.)
 4. **Layers** (§27):
    - the data, `fromBuild`, `fromBuildMemo`, and the MemoMap with its
      Deferred;
@@ -231,8 +252,10 @@ the user can veto any of them.
 36. **Accessors that return an Option wait** for an Option type (§26.1).
 37. **`Scope.Scope` replaces `Scope.contextKey`.** `Effect.scope` keeps
     M2's message (§26.4).
-38. **The release context follows v4** (§26.5). This changes one approved
-    M2 spec, which moves to the raw Scope functions (§30).
+38. **The release context follows v4** (§26.5). This flips the outcome of
+    one approved M2 spec, which moves to the raw Scope functions (§30). Six
+    more M2 specs, which test M2's internal string-keyed API, are restated
+    on the public API with the same behaviors.
 39. **Layers have methods,** and v4's `Layer.catch` is `catchAll` (§27).
 40. **Sharing follows v4's MemoMap,** nested reuse included. v4's `local`
     option is spelled `fresh`, and the Deferred stays internal (§27.4,
