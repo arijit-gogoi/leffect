@@ -272,10 +272,10 @@ local function runTogether(finalizers, keys, count, exit)
         forks[n] = Fiber.forkUnsafe(fiber, finalizerEffect(finalizers[i], exit), true, "inherit")
       end
     end
-    return core.flatMap(Fiber.awaitAll(forks), function()
+    return core.flatMap(Fiber.awaitAll(forks), function(exits)
       local reasons, failed = {}, 0
       for i = 1, n do
-        failed = addReasons(reasons, failed, forks[i].exit)
+        failed = addReasons(reasons, failed, exits[i])
       end
       return voidAll(reasons, failed)
     end)

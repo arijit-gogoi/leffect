@@ -83,8 +83,19 @@ local function sortedById(set)
   return list
 end
 
+--- The exits of `fibers`, which are all done, in order.
+---@param fibers leffect.Fiber[]
+---@return leffect.Exit.Success
+local function exitsOf(fibers)
+  local exits = {}
+  for i = 1, #fibers do
+    exits[i] = fibers[i].exit
+  end
+  return exitSucceed(exits)
+end
+
 --- An effect that waits until every fiber in `fibers` is done, then succeeds
---- with nil. Read each fiber's `exit` afterwards.
+--- with their exits, in order (v4's `Fiber.awaitAll`).
 ---@param fibers leffect.Fiber[]
 ---@return leffect.Effect
 local function awaitAll(fibers)
@@ -96,13 +107,13 @@ local function awaitAll(fibers)
       end
     end
     if remaining == 0 then
-      resume(exitVoid)
+      resume(exitsOf(fibers))
       return nil
     end
     local function onExit()
       remaining = remaining - 1
       if remaining == 0 then
-        resume(exitVoid)
+        resume(exitsOf(fibers))
       end
     end
     local removers = {}
@@ -123,7 +134,7 @@ end
 Fiber.awaitAll = awaitAll
 
 --- Interrupts every fiber in `fibers` on behalf of `fiberId`, then waits for
---- all of them, finalizers included.
+--- all of them, finalizers included, and succeeds with nil.
 ---@param fibers leffect.Fiber[]
 ---@param fiberId integer?
 ---@return leffect.Effect
@@ -132,7 +143,7 @@ function Fiber.interruptAllAs(fibers, fiberId)
     for i = 1, #fibers do
       fibers[i]:interruptUnsafe(fiberId)
     end
-    return awaitAll(fibers)
+    return core.asVoid(awaitAll(fibers))
   end)
 end
 
