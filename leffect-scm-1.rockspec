@@ -39,6 +39,7 @@ build = {
   modules = {
     ["leffect"] = "src/leffect/init.lua",
     ["leffect.cause"] = "src/leffect/cause.lua",
+    ["leffect.context"] = "src/leffect/context.lua",
     ["leffect.core"] = "src/leffect/core.lua",
     ["leffect.effect"] = "src/leffect/effect.lua",
     ["leffect.exit"] = "src/leffect/exit.lua",

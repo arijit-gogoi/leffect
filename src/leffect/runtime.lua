@@ -41,6 +41,7 @@ local exitSucceed, exitFailCause = core.exitSucceed, core.exitFailCause
 ---@field opCount integer
 ---@field finalExit leffect.Exit?
 ---@field suspension leffect.Suspension?
+---@field context table<string, any> The services the fiber runs with; never mutated.
 ---@field evaluate fun(self: leffect.FiberState, effect: leffect.Effect)
 
 ---Internal: the state of one async wait (FIBER-DESIGN.md §6.2).
@@ -493,6 +494,16 @@ onFailure.AsyncCancel = function(frame, cause, fiber)
   end
   push(fiber, { _op = "FinalizerResult", exit = exitFailCause(cause) })
   return frame.cancel
+end
+
+-- Context (FIBER-DESIGN.md §18) ---------------------------------------------
+
+-- A SetContext frame puts the previous context back when it is popped. It has
+-- no handlers, so it is transparent on both paths, and onPop runs even for a
+-- skipped frame: the context comes back on every exit path.
+onPop.SetContext = function(frame, fiber)
+  fiber.context = frame.context
+  return nil
 end
 
 -- Gen (FIBER-DESIGN.md §9) --------------------------------------------------

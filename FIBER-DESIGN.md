@@ -1372,7 +1372,8 @@ that restores it, but no public Context API.
   strings, like v4's service keys. M2 uses one key, `"leffect/Scope"`.
   - Adding a service copies the table; nothing mutates a context.
   - The internal module `leffect.context` has `empty`,
-    `add(ctx, key, value)` and `get(ctx, key)`.
+    `add(ctx, key, value)`, `get(ctx, key)`, and
+    `provide(key, value, eff)`, which is `provideService` below.
 - **Inheritance.** Root fibers start with `empty`. `forkUnsafe` hands the
   child the parent's table (§8), so every fork, daemon or not, sees the
   parent's Scope.
