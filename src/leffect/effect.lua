@@ -75,6 +75,95 @@ function Effect.catchAll(self, f)
   end)
 end
 
+--- Recovers from the expected errors for which `predicate(err)` is true, with
+--- the effect returned by `f(err)`. Other errors go to `orElse(err)` if it is
+--- given, and otherwise keep failing. Like `catchAll`, it never recovers an
+--- interruption or a cause that holds a defect.
+---@generic E
+---@param self leffect.Effect
+---@param predicate fun(err: E): boolean
+---@param f fun(err: E): leffect.Effect
+---@param orElse (fun(err: E): leffect.Effect)?
+---@return leffect.Effect
+function Effect.catchIf(self, predicate, f, orElse)
+  return core.catchCause(self, function(cause)
+    local found, value = Cause.findRecoverableError(cause)
+    if not found then
+      return exitFailCause(value)
+    end
+    if predicate(value) then
+      return f(value)
+    end
+    if orElse then
+      return orElse(value)
+    end
+    return exitFailCause(cause)
+  end)
+end
+
+--- Recovers from the expected errors whose `_tag` is `tag`, or is one of the
+--- tags when `tag` is a list, with the effect returned by `f(err)`. Errors
+--- that are not tables never match. Other errors go to `orElse(err)` if it is
+--- given, and otherwise keep failing.
+---@param self leffect.Effect
+---@param tag string|string[]
+---@param f fun(err: table): leffect.Effect
+---@param orElse (fun(err: any): leffect.Effect)?
+---@return leffect.Effect
+function Effect.catchTag(self, tag, f, orElse)
+  local predicate
+  if type(tag) == "table" then
+    local tags = tag
+    predicate = function(err)
+      if type(err) ~= "table" then
+        return false
+      end
+      local errTag = err._tag
+      if errTag == nil then
+        return false
+      end
+      for i = 1, #tags do
+        if tags[i] == errTag then
+          return true
+        end
+      end
+      return false
+    end
+  else
+    predicate = function(err)
+      if type(err) ~= "table" then
+        return false
+      end
+      local errTag = err._tag
+      return errTag ~= nil and errTag == tag
+    end
+  end
+  return Effect.catchIf(self, predicate, f, orElse)
+end
+
+--- Recovers from the expected errors whose `_tag` has a handler in `cases`, as
+--- in `{ NotFound = function(err) ... end }`. Other errors go to `orElse(err)`
+--- if it is given, and otherwise keep failing.
+---@param self leffect.Effect
+---@param cases table<string, fun(err: table): leffect.Effect>
+---@param orElse (fun(err: any): leffect.Effect)?
+---@return leffect.Effect
+function Effect.catchTags(self, cases, orElse)
+  return Effect.catchIf(self, function(err)
+    if type(err) ~= "table" then
+      return false
+    end
+    local errTag = err._tag
+    return type(errTag) == "string" and cases[errTag] ~= nil
+  end, function(err)
+    return cases[err._tag](err)
+  end, orElse)
+end
+
+--- Succeeds with the exit of `self`, so it never fails. While its fiber is
+--- interrupted and interruptible, it doesn't run, like any recovery handler.
+Effect.exit = core.exit
+
 --- True if `value` is an effect (Exits included).
 Effect.isEffect = core.isEffect
 
@@ -427,6 +516,10 @@ methods.map = Effect.map
 methods.flatMap = Effect.flatMap
 methods.catchAll = Effect.catchAll
 methods.catchCause = Effect.catchCause
+methods.catchIf = Effect.catchIf
+methods.catchTag = Effect.catchTag
+methods.catchTags = Effect.catchTags
+methods.exit = Effect.exit
 methods.as = Effect.as
 methods.asVoid = Effect.asVoid
 methods.uninterruptible = Effect.uninterruptible

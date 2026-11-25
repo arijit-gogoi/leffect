@@ -33,6 +33,10 @@
 ---@field flatMap fun(self: leffect.Effect, f: fun(value: any): leffect.Effect): leffect.Effect
 ---@field catchAll fun(self: leffect.Effect, f: fun(err: any): leffect.Effect): leffect.Effect
 ---@field catchCause fun(self: leffect.Effect, f: fun(cause: leffect.Cause): leffect.Effect): leffect.Effect
+---@field catchIf fun(self: leffect.Effect, predicate: function, f: function, orElse: function?): leffect.Effect
+---@field catchTag fun(self: leffect.Effect, tag: string|string[], f: function, orElse: function?): leffect.Effect
+---@field catchTags fun(self: leffect.Effect, cases: table<string, function>, orElse: function?): leffect.Effect
+---@field exit fun(self: leffect.Effect): leffect.Effect
 ---@field onExit fun(self: leffect.Effect, f: fun(exit: leffect.Exit): leffect.Effect?): leffect.Effect
 ---@field ensuring fun(self: leffect.Effect, finalizer: leffect.Effect): leffect.Effect
 ---@field onInterrupt fun(self: leffect.Effect, f: fun(interruptors: integer[]): leffect.Effect?): leffect.Effect
@@ -182,6 +186,25 @@ local function noop() end
 ---@return leffect.Effect
 function core.asVoid(self)
   return core.map(self, noop)
+end
+
+---@param cause leffect.Cause
+---@return leffect.Exit.Success
+local function succeedWithFailure(cause)
+  return core.exitSucceed(core.exitFailCause(cause))
+end
+
+--- Succeeds with the exit of `self`: never fails (4.1.5's `Effect.exit`). An
+--- Exit given as `self` becomes the success value at once. Otherwise this is a
+--- recovery handler, so it doesn't run while its fiber is interrupted and
+--- interruptible.
+---@param self leffect.Effect
+---@return leffect.Effect
+function core.exit(self)
+  if core.isExit(self) then
+    return core.exitSucceed(self)
+  end
+  return core.catchCause(core.map(self, core.exitSucceed), succeedWithFailure)
 end
 
 return core
