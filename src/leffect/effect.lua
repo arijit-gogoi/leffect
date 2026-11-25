@@ -5,7 +5,9 @@
 --- module functions (`Effect.map(eff, f)`) and as methods (`eff:map(f)`).
 
 local Cause = require("leffect.cause")
+local Context = require("leffect.context")
 local Fiber = require("leffect.fiber")
+local Scope = require("leffect.scope")
 local core = require("leffect.core")
 local runtime = require("leffect.runtime")
 
@@ -276,6 +278,57 @@ function Effect.onInterrupt(self, f)
   end)
 end
 
+-- Scope (FIBER-DESIGN.md §19) -----------------------------------------------
+
+local push = runtime.push
+local SCOPE_KEY = Scope.contextKey
+
+--- An effect that succeeds with the current scope, the one `Effect.scoped` or
+--- `Scope.provide` set. Without one, it dies.
+Effect.scope = core.withFiber(function(fiber)
+  local scope = Context.get(fiber.context, SCOPE_KEY)
+  if scope == nil then
+    return exitFailCause(
+      Cause.die("Effect.scope: no Scope in context; wrap the effect in Effect.scoped")
+    )
+  end
+  return exitSucceed(scope)
+end)
+
+--- Runs `self` with a fresh current scope, then closes the scope with
+--- `self`'s exit. The finalizers run in the outer context, uninterruptibly,
+--- and their failures are added to the exit.
+---@param self leffect.Effect
+---@return leffect.Effect
+function Effect.scoped(self)
+  return core.withFiber(function(fiber)
+    local previous = fiber.context
+    local scope = Scope.makeUnsafe()
+    -- Both frames are pushed in the step that changes the context, so no
+    -- interrupt can land in between. Unwinding pops SetContext first, so the
+    -- scope closes in the outer context.
+    push(fiber, {
+      _op = core.OP_ON_EXIT,
+      f = function(exit)
+        return Scope.closeUnsafe(scope, exit)
+      end,
+    })
+    push(fiber, { _op = "SetContext", context = previous })
+    fiber.context = Context.add(previous, SCOPE_KEY, scope)
+    return self
+  end)
+end
+
+--- Adds `f(exit)` to the current scope as a finalizer. `f` returns an effect
+--- or nil.
+---@param f leffect.Scope.Finalizer
+---@return leffect.Effect
+function Effect.addFinalizer(f)
+  return core.flatMap(Effect.scope, function(scope)
+    return Scope.addFinalizerExit(scope, f)
+  end)
+end
+
 -- Fibers --------------------------------------------------------------------
 
 --- Starts `self` on a child fiber, on the next tick, and succeeds with the
@@ -535,6 +588,7 @@ methods.interruptible = Effect.interruptible
 methods.onExit = Effect.onExit
 methods.ensuring = Effect.ensuring
 methods.onInterrupt = Effect.onInterrupt
+methods.scoped = Effect.scoped
 methods.fork = Effect.fork
 methods.forkDaemon = Effect.forkDaemon
 methods.race = Effect.race

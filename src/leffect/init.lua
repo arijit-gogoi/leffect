@@ -24,6 +24,7 @@ return {
   Effect = require("leffect.effect"),
   Exit = require("leffect.exit"),
   Fiber = require("leffect.fiber"),
+  Scope = require("leffect.scope"),
   --- Runs an effect from an `Effect.gen` body; the same function the body
   --- gets as its argument.
   run = require("leffect.runtime").run,

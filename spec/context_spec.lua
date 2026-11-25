@@ -94,4 +94,101 @@ describe("Context", function()
       assert.are.equal("outer", seen)
     end)
   end)
+
+  describe("with Effect.scoped", function()
+    local scheduler
+    before_each(function()
+      scheduler = TestScheduler.new()
+    end)
+
+    it("gives every fork the same scope, daemon or not", function()
+      local function seenByFork(fork)
+        return Effect.scoped(Effect.scope:flatMap(function(scope)
+          return fork(Effect.scope)
+            :flatMap(function(fiber)
+              return fiber:join()
+            end)
+            :map(function(seen)
+              return seen == scope
+            end)
+        end))
+      end
+      assert.is_true(h.valueOf(scheduler:run(seenByFork(Effect.fork))))
+      assert.is_true(h.valueOf(scheduler:run(seenByFork(Effect.forkDaemon))))
+    end)
+
+    it("restores the outer scope after a nested scoped succeeds or fails", function()
+      local program = Effect.scoped(Effect.scope:flatMap(function(outer)
+        return Effect.scoped(Effect.scope)
+          :flatMap(function(inner)
+            assert(inner ~= outer)
+            return Effect.scoped(Effect.fail("e"))
+          end)
+          :catchAll(function()
+            return Effect.scope
+          end)
+          :map(function(after)
+            return after == outer
+          end)
+      end))
+      assert.is_true(Effect.runSync(program))
+    end)
+
+    it("restores the outer scope after a nested scoped is interrupted", function()
+      local outer, seen
+      local program = Effect.scoped(Effect.scope:flatMap(function(scope)
+        outer = scope
+        return Effect.scoped(Effect.never):ensuring(Effect.scope:map(function(current)
+          seen = current
+        end))
+      end))
+      local fiber = h.started(scheduler, program)
+      fiber:interruptUnsafe()
+      scheduler:runAll()
+      h.assertInterrupted(fiber:poll())
+      assert.is_not_nil(outer)
+      assert.are.equal(outer, seen)
+    end)
+
+    it("runs a scope's finalizers in the outer context", function()
+      local program = Effect.scoped(Effect.scope:flatMap(function(outer)
+        local seen
+        return Effect.scoped(Effect.addFinalizer(function()
+          return Effect.scope:map(function(current)
+            seen = current
+          end)
+        end)):map(function()
+          return seen == outer
+        end)
+      end))
+      assert.is_true(Effect.runSync(program))
+    end)
+
+    it("closes an inner scope interrupted as soon as it can be, in the outer context", function()
+      local log, record = h.recorder()
+      local outer, seen
+      local program = Effect.scoped(Effect.scope:flatMap(function(scope)
+        outer = scope
+        return Effect.uninterruptibleMask(function(restore)
+          return Effect.sleep(10):flatMap(function()
+            return Effect.scoped(Effect.addFinalizer(function()
+              return record("inner closed")
+            end):flatMap(function()
+              return restore(Effect.sync(function()
+                log[#log + 1] = "body ran"
+              end))
+            end))
+          end)
+        end):ensuring(Effect.scope:map(function(current)
+          seen = current
+        end))
+      end))
+      local fiber = h.started(scheduler, program)
+      fiber:interruptUnsafe()
+      scheduler:runAll()
+      h.assertInterrupted(fiber:poll())
+      assert.are.same({ "inner closed" }, log)
+      assert.are.equal(outer, seen)
+    end)
+  end)
 end)

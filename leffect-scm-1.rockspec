@@ -46,5 +46,6 @@ build = {
     ["leffect.fiber"] = "src/leffect/fiber.lua",
     ["leffect.runtime"] = "src/leffect/runtime.lua",
     ["leffect.scheduler.test"] = "src/leffect/scheduler/test.lua",
+    ["leffect.scope"] = "src/leffect/scope.lua",
   },
 }

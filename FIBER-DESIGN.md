@@ -1440,7 +1440,11 @@ A Scope collects finalizers and runs them when it closes. This follows v4's
 | `Scope.addFinalizerExit(scope, f)` | Effect: add `f(exit)`. On a closed scope, run `f(scope.exit)` at once instead. |
 | `Scope.addFinalizer(scope, eff)` | `addFinalizerExit` with a finalizer that ignores the exit. |
 | `Scope.close(scope, exit)` | Effect: close `scope` with `exit`, uninterruptibly (§19.3). A closed scope stays as it is. |
+| `Scope.closeUnsafe(scope, exit)` | Close `scope` outside an effect, and return the effect that runs its finalizers, or nil (§19.3). Public in v4 too. |
 | `Scope.fork(scope, strategy?)` | Effect: a child scope that closes when `scope` closes. Forking a closed scope gives a closed child with the same exit. |
+| `Scope.forkUnsafe(scope, strategy?)` | The same, outside an effect. Public in v4 too. |
+| `Scope.addFinalizerUnsafe(scope, key, f)`, `Scope.removeFinalizerUnsafe(scope, key)` | Add or remove a keyed finalizer, outside an effect (§19.1). Internal in v4; public here because `leffect.effect` needs them for `forkIn`. |
+| `Scope.contextKey` | `"leffect/Scope"`, the context key of the current scope, until M3's Tags. |
 | `Scope.provide(eff, scope)` | Runs `eff` with `scope` as the current scope, without closing it. |
 | `Scope.use(eff, scope)` | `provide`, then close `scope` with `eff`'s exit. Below the cut line (§24). |
 | `Effect.scope` | Effect: the current scope. Without one, it dies with "Effect.scope: no Scope in context; wrap the effect in Effect.scoped". |
