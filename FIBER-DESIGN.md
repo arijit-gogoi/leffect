@@ -2,7 +2,7 @@
 # Leffect: fiber and interruption design
 
 Status: settled for Milestone M1 on 2026-11-25, and re-pinned the same day.
-The M2 design (Part II, §18–§25) was drafted on 2026-11-25 and awaits review.
+The M2 design (Part II, §18–§25) was drafted and approved on 2026-11-25.
 
 **Reference:** Effect 4.1.5, which is the `effect@4.1.5` tag of
 `Effect-TS/effect` (commit `e3aca1f`). The files are
@@ -453,9 +453,9 @@ M1's, and the two changes to the cause are new with the re-pin (§17):
   the cause and the interrupt stands alone. Defects stay.
 
   Example: a finalizer that fails with `Fail` during an interrupt keeps its
-  reason only if no recovery handler is skipped later. This conflicts with
-  CLAUDE.md's "finalizer errors are added to the Cause", and needs the user's
-  confirmation (§17, decision 19).
+  reason only if no recovery handler is skipped later. The user confirmed
+  this (§17, decision 19), and CLAUDE.md names it as the exception to
+  "finalizer errors are added to the Cause".
 
 An override from `Restore(true)` comes without a frame. It is skipped like any
 handler, but it doesn't count as a recovery handler; v4's restore
@@ -1344,12 +1344,11 @@ These are unchanged between beta.98 and 4.1.5, so M1 still matches them:
 
 **Decisions taken on the user's behalf**
 
-19. **Dropping Fails (change 3) follows 4.1.5.** It conflicts with CLAUDE.md's
-    "finalizer errors are added to the Cause": a finalizer's Fail during an
+19. **Dropping Fails (change 3) follows 4.1.5.** A finalizer's Fail during an
     interrupt is lost if a recovery handler is skipped later. Dies are always
-    kept. This stays unsettled until the user confirms it, and CLAUDE.md is
-    unchanged. The alternative is to record only the interrupt and keep the
-    Fails, as M1 does: a deviation from 4.1.5, to be added to §14.
+    kept. The user confirmed this on 2026-11-25, over keeping the Fails as a
+    deviation. CLAUDE.md's rule that "finalizer errors are added to the
+    Cause" now names this exception.
 20. **The pin is the release tag** (`e3aca1f`), not `main` (`296c209` on
     2026-11-24). `main` changes `forkUnsafe` and `catchReasons` after the
     release, and neither affects Leffect.
@@ -1870,8 +1869,6 @@ These make M2 done:
    - the skip rule's handling of interrupts and Fails (§5.3);
    - `catchAll` on `findRecoverableError`;
    - updates to the M1 specs these change.
-
-   Dropping Fails waits for the user's answer on decision 19.
 2. `Effect.exit`, `catchIf`, `catchTag` and `catchTags`.
 3. `gen` (§9).
 4. The context: `leffect.context`, `fiber.context`, inheritance in
@@ -1901,7 +1898,8 @@ Below the cut line, built last or deferred:
 ## 25. M2 decisions taken on the user's behalf (2026-11-25)
 
 The user picked option (a), a minimal fiber context for the Scope, and asked
-for this design. These were decided here; veto any of them.
+for this design. These were decided here, and the user approved them with the
+design on 2026-11-25.
 
 21. **The context** is an immutable table keyed by strings, and internal until
     M3. Only `"leffect/Scope"` exists (§18).

@@ -25,7 +25,9 @@ services/layers. Effect TS's behavior is the reference: when in doubt, match it.
     `interruptFork` doesn't wait.
   - Interruption is a Cause, not a failure: `catchAll` must not catch it.
   - Finalizers always run uninterruptibly, and their errors are added to the
-    Cause.
+    Cause. One exception, as in Effect 4.1.5: when an interrupt skips a
+    recovery handler, the Fail reasons are dropped, and only the Die and
+    Interrupt reasons stay (`FIBER-DESIGN.md` §5.3).
   - The runtime never throws into user code. On failure or interrupt, abandon
     the suspended gen coroutine.
 - **Errors:** expected failures are tagged tables (`{ _tag = "NotFound", ... }`).
