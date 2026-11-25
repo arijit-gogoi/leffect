@@ -107,8 +107,27 @@ local function sameReason(a, b)
   return a.fiberId == b.fiberId
 end
 
---- The reasons of `left`, followed by those of `right` that `left` doesn't
---- already have (v4's `causeCombine`). Returns `left` when `right` adds nothing.
+--- Appends `reason` to `list` (holding `n` reasons) unless an equal reason is
+--- already there. Returns the new count.
+---@param list leffect.Cause.Reason[]
+---@param n integer
+---@param reason leffect.Cause.Reason
+---@return integer
+local function addDistinct(list, n, reason)
+  for i = 1, n do
+    if sameReason(list[i], reason) then
+      return n
+    end
+  end
+  n = n + 1
+  list[n] = reason
+  return n
+end
+
+--- The reasons of `left` followed by those of `right`, keeping only the first
+--- of each set of equal reasons (4.1.5's `causeCombine`). If either cause is
+--- empty, returns the other; if the result has the same reasons as `left`,
+--- returns `left`.
 ---@param left leffect.Cause
 ---@param right leffect.Cause
 ---@return leffect.Cause
@@ -120,28 +139,56 @@ function Cause.combine(left, right)
   elseif nb == 0 then
     return left
   end
-  local merged, n = {}, na
+  local merged, n = {}, 0
   for i = 1, na do
-    merged[i] = a[i]
+    n = addDistinct(merged, n, a[i])
   end
+  local keptLeft = n == na
   for j = 1, nb do
-    local reason = b[j]
-    local seen = false
-    for i = 1, n do
-      if sameReason(merged[i], reason) then
-        seen = true
-        break
-      end
-    end
-    if not seen then
-      n = n + 1
-      merged[n] = reason
-    end
+    n = addDistinct(merged, n, b[j])
   end
-  if n == na then
+  if keptLeft and n == na then
     return left
   end
   return make(merged)
+end
+
+--- Appends the Interrupt reasons of `interrupts` whose fiber ID `cause` doesn't
+--- have yet (4.1.5's `causeAddInterrupts`). Every other reason stays as it is,
+--- duplicates included. Returns `cause` itself when nothing is missing.
+---@param cause leffect.Cause
+---@param interrupts leffect.Cause
+---@return leffect.Cause
+function Cause.addInterrupts(cause, interrupts)
+  local reasons, added = cause.reasons, interrupts.reasons
+  local out, n = nil, #reasons
+  for j = 1, #added do
+    local reason = added[j]
+    if reason._tag == "Interrupt" then
+      local list, present = out or reasons, false
+      for i = 1, n do
+        local other = list[i]
+        if other._tag == "Interrupt" and other.fiberId == reason.fiberId then
+          present = true
+          break
+        end
+      end
+      if not present then
+        if not out then
+          out = {}
+          for i = 1, n do
+            out[i] = reasons[i]
+          end
+        end
+        n = n + 1
+        out[n] = reason
+      end
+    end
+  end
+  if not out then
+    return cause
+  end
+  return make(out)
 end
 
 ---@param cause leffect.Cause
@@ -256,6 +303,57 @@ end
 ---@return boolean
 function Cause.hasInterrupts(cause)
   return find(cause, "Interrupt") ~= nil
+end
+
+--- If the cause has both Fail and Die reasons, returns a cause where each Fail
+--- became a Die holding its error, in place (4.1.5's `causeElectDefects`).
+--- Otherwise returns the cause itself.
+---@param cause leffect.Cause
+---@return leffect.Cause
+function Cause.electDefects(cause)
+  local reasons = cause.reasons
+  local n = #reasons
+  local hasFail, hasDie = false, false
+  for i = 1, n do
+    local tag = reasons[i]._tag
+    if tag == "Fail" then
+      hasFail = true
+    elseif tag == "Die" then
+      hasDie = true
+    end
+  end
+  if not (hasFail and hasDie) then
+    return cause
+  end
+  local elected = {}
+  for i = 1, n do
+    local reason = reasons[i]
+    if reason._tag == "Fail" then
+      elected[i] = { _tag = "Die", defect = reason.error }
+    else
+      elected[i] = reason
+    end
+  end
+  return make(elected)
+end
+
+--- What a typed recovery handler may recover (4.1.5's `findRecoverableError`).
+--- A cause with a defect is not recoverable.
+--- - With no Die, returns `true` and the first error, if there is a Fail.
+--- - Otherwise returns `false` and the cause to fail with instead: the
+---   elected cause if it has a Die, else the cause itself.
+---@param cause leffect.Cause
+---@return boolean found
+---@return any errorOrCause
+function Cause.findRecoverableError(cause)
+  if find(cause, "Die") then
+    return false, Cause.electDefects(cause)
+  end
+  local reason = find(cause, "Fail")
+  if reason then
+    return true, reason.error
+  end
+  return false, cause
 end
 
 --- True if the cause has at least one reason, and every reason is an

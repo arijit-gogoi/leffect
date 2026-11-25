@@ -24,6 +24,15 @@ local function reasonOf(effect)
   return reasons[1]
 end
 
+-- The tags of a cause's reasons, in order.
+local function tags(cause)
+  local out = {}
+  for i, reason in ipairs(cause.reasons) do
+    out[i] = reason._tag
+  end
+  return out
+end
+
 -- Returns a function that counts its calls in `counter.n` and returns `result`.
 local function counted(counter, result)
   return function()
@@ -485,14 +494,33 @@ describe("Effect", function()
       assert.are.equal(7, reason.fiberId)
     end)
 
-    it("recovers with the first failure of a cause, even after a defect", function()
+    it("doesn't recover a cause that holds a defect, and elects its failures", function()
+      local calls = { n = 0 }
       local mixed = Cause.fromReasons({
         { _tag = "Die", defect = "bug" },
         { _tag = "Fail", error = "a" },
         { _tag = "Fail", error = "b" },
       })
-      local effect = Effect.failCause(mixed):catchAll(Effect.succeed)
-      assert.are.equal("a", Effect.runSync(effect))
+      local cause = causeOf(Effect.failCause(mixed):catchAll(counted(calls, Effect.succeed(1))))
+      assert.are.equal(0, calls.n)
+      assert.are.same({ "Die", "Die", "Die" }, tags(cause))
+      assert.are.same({ "bug", "a", "b" }, (Cause.defects(cause)))
+    end)
+
+    it("doesn't recover a failure whose finalizer died (4.1.5)", function()
+      local calls = { n = 0 }
+      local effect = Effect.fail("e")
+        :ensuring(Effect.die("d"))
+        :catchAll(counted(calls, Effect.succeed("caught")))
+      local cause = causeOf(effect)
+      assert.are.equal(0, calls.n)
+      assert.are.same({ "Die", "Die" }, tags(cause))
+      assert.are.same({ "e", "d" }, (Cause.defects(cause)))
+    end)
+
+    it("recovers a failure next to an interrupt", function()
+      local mixed = Cause.combine(Cause.interrupt(7), Cause.fail("a"))
+      assert.are.equal("a", Effect.runSync(Effect.failCause(mixed):catchAll(Effect.succeed)))
     end)
 
     it("turns a throw in the handler into a defect that replaces the error", function()

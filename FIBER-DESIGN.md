@@ -561,8 +561,9 @@ canceler. In M3 this moves behind a `Clock` service.
 ```lua
 function Fiber:interruptUnsafe(byId)
   if self.exit then return end
-  self.interruptCause = Cause.combine(self.interruptCause or Cause.empty,
-                                      Cause.interrupt(byId))
+  local cause = Cause.interrupt(byId) -- 4.1.5 adds it with causeAddInterrupts
+  self.interruptCause = self.interruptCause
+    and Cause.addInterrupts(self.interruptCause, cause) or cause
   if not self.interruptible then return end -- delivered later by Restore(true)
   local s = self.suspension
   if self.status == "suspended" and s and not s.resumed then

@@ -48,6 +48,13 @@ describe("race", function()
     assert.are.same({ "a", "b" }, (Cause.failures(h.causeOf(exit))))
   end)
 
+  it("elects defects when every racer fails and one of them dies (4.1.5)", function()
+    local exit = scheduler:run(Effect.race(Effect.fail("a"), Effect.die("b")))
+    local cause = h.causeOf(exit)
+    assert.are.same({ "Die", "Die" }, h.tags(cause))
+    assert.are.same({ "a", "b" }, (Cause.defects(cause)))
+  end)
+
   it("raceAll races any number of effects", function()
     local exit = scheduler:run(Effect.raceAll({
       Effect.sleep(30):as(3),

@@ -179,18 +179,55 @@ evaluate.Success = function(op, fiber)
   return DONE
 end
 
--- While the fiber is interruptible and interrupted, recovery handlers are
--- skipped (FIBER-DESIGN.md §5.3). Finalizer frames escape this, because
--- their onPop makes the fiber uninterruptible first.
+--- The cause without its Fail reasons, or the cause itself if it has none.
+---@param cause leffect.Cause
+---@return leffect.Cause
+local function withoutFails(cause)
+  local reasons = cause.reasons
+  local kept, n = {}, 0
+  for i = 1, #reasons do
+    local reason = reasons[i]
+    if reason._tag ~= "Fail" then
+      n = n + 1
+      kept[n] = reason
+    end
+  end
+  if n == #reasons then
+    return cause
+  end
+  return Cause.fromReasons(kept)
+end
+
+-- The skip rule (FIBER-DESIGN.md §5.3, 4.1.5's `exitFailCause`). While the
+-- fiber is interruptible and interrupted, recovery handlers don't run, and
+-- the cause that unwinds records the fiber's interrupts. If a skipped handler
+-- came from a frame (a recovery handler, not a Restore override), the Fail
+-- reasons are dropped too. Finalizer frames escape the skip, because their
+-- onPop makes the fiber uninterruptible first; so the flag is read only after
+-- the first frame is popped.
 evaluate.Failure = function(op, fiber)
+  local cause = op.cause
   local handler, frame = nextHandler(fiber, onFailure)
-  while handler and fiber.interruptible and fiber.interruptCause do
-    handler, frame = nextHandler(fiber, onFailure)
+  local interrupted = fiber.interruptCause
+  if interrupted and fiber.interruptible then
+    local skipped = false
+    while handler and fiber.interruptible do
+      skipped = skipped or frame ~= nil
+      handler, frame = nextHandler(fiber, onFailure)
+    end
+    if skipped then
+      cause = withoutFails(cause)
+    end
+    cause = Cause.addInterrupts(cause, interrupted)
   end
   if handler then
-    return handler(frame, op.cause, fiber)
+    return handler(frame, cause, fiber)
   end
-  fiber.finalExit = op --[[@as leffect.Exit]]
+  if cause == op.cause then
+    fiber.finalExit = op --[[@as leffect.Exit]]
+  else
+    fiber.finalExit = exitFailCause(cause)
+  end
   return DONE
 end
 
@@ -277,14 +314,23 @@ onPop.Restore = function(frame, fiber)
   return nil
 end
 
---- The onPop of finalizer and canceler frames: they always run
---- uninterruptibly.
+--- Makes the fiber uninterruptible until the frames above the pushed Restore
+--- are gone. Does nothing if it already is.
 ---@param fiber leffect.FiberState
-local function makeUninterruptible(_, fiber)
+local function enterUninterruptible(fiber)
   if fiber.interruptible then
     fiber.interruptible = false
     push(fiber, RESTORE_TRUE)
   end
+end
+
+runtime.enterUninterruptible = enterUninterruptible
+
+--- The onPop of finalizer and canceler frames: they always run
+--- uninterruptibly.
+---@param fiber leffect.FiberState
+local function makeUninterruptible(_, fiber)
+  enterUninterruptible(fiber)
   return nil
 end
 
@@ -294,10 +340,7 @@ end
 ---@return leffect.Effect
 function runtime.uninterruptible(effect)
   return core.withFiber(function(fiber)
-    if fiber.interruptible then
-      fiber.interruptible = false
-      push(fiber, RESTORE_TRUE)
-    end
+    enterUninterruptible(fiber)
     return effect
   end)
 end
@@ -344,7 +387,8 @@ end
 
 -- A FinalizerResult frame sits under a running finalizer. When the finalizer
 -- succeeds it returns the original exit; when it fails, it adds the
--- finalizer's cause to the original one instead of replacing it.
+-- finalizer's cause to the original one instead of replacing it, and elects
+-- the defects (4.1.5's `combineFinalizerCause`).
 onSuccess.FinalizerResult = function(frame)
   ---@cast frame -nil
   return frame.exit
@@ -354,7 +398,7 @@ onFailure.FinalizerResult = function(frame, cause)
   ---@cast frame -nil
   local exit = frame.exit
   if exit._op == core.OP_FAILURE then
-    return exitFailCause(Cause.combine(exit.cause, cause))
+    return exitFailCause(Cause.electDefects(Cause.combine(exit.cause, cause)))
   end
   return exitFailCause(cause)
 end

@@ -67,9 +67,29 @@ describe("Cause", function()
       assert.are.same({ 1, 2 }, Cause.interruptors(cause))
     end)
 
+    it("also drops repeats within the first cause, as 4.1.5 does", function()
+      local repeated = Cause.fromReasons({
+        { _tag = "Fail", error = "a" },
+        { _tag = "Fail", error = "a" },
+      })
+      local cause = Cause.combine(repeated, Cause.fail("b"))
+      assert.are.same({ "a", "b" }, (Cause.failures(cause)))
+      assert.are.equal(2, #repeated.reasons)
+    end)
+
     it("returns the first cause when the second adds nothing", function()
       local cause = Cause.combine(Cause.fail("a"), Cause.die("x"))
       assert.are.equal(cause, Cause.combine(cause, Cause.fail("a")))
+    end)
+
+    it("returns a new cause when only the first cause had repeats", function()
+      local repeated = Cause.fromReasons({
+        { _tag = "Fail", error = "a" },
+        { _tag = "Fail", error = "a" },
+      })
+      local cause = Cause.combine(repeated, Cause.fail("a"))
+      assert.are_not.equal(repeated, cause)
+      assert.are.same({ "a" }, (Cause.failures(cause)))
     end)
 
     it("keeps reasons of different kinds with equal payloads", function()
@@ -81,6 +101,103 @@ describe("Cause", function()
       assert.are.same({ "Fail", "Fail" }, tags(Cause.combine(a, b)))
       assert.are.equal(1, #a.reasons)
       assert.are.equal(1, #b.reasons)
+    end)
+  end)
+
+  describe("addInterrupts", function()
+    it("appends only the interrupts whose fiber ID the cause doesn't have", function()
+      local cause = Cause.fromReasons({
+        { _tag = "Fail", error = "a" },
+        { _tag = "Interrupt", fiberId = 1 },
+      })
+      local interrupts = Cause.fromReasons({
+        { _tag = "Interrupt", fiberId = 1 },
+        { _tag = "Interrupt", fiberId = 2 },
+        { _tag = "Interrupt", fiberId = 2 },
+      })
+      local added = Cause.addInterrupts(cause, interrupts)
+      assert.are.same({ "Fail", "Interrupt", "Interrupt" }, tags(added))
+      assert.are.same({ 1, 2 }, Cause.interruptors(added))
+    end)
+
+    it("keeps every other reason as it is, duplicates included", function()
+      local fail = { _tag = "Fail", error = "a" }
+      local cause = Cause.fromReasons({ fail, fail, { _tag = "Die", defect = "x" } })
+      local added = Cause.addInterrupts(cause, Cause.interrupt(3))
+      assert.are.same({ "Fail", "Fail", "Die", "Interrupt" }, tags(added))
+      assert.are.equal(fail, added.reasons[2])
+    end)
+
+    it("ignores reasons that are not interrupts", function()
+      local cause = Cause.interrupt(1)
+      assert.are.equal(cause, Cause.addInterrupts(cause, Cause.fail("a")))
+    end)
+
+    it("returns the cause itself when nothing is missing, and never changes it", function()
+      local cause = Cause.combine(Cause.fail("a"), Cause.interrupt(1))
+      assert.are.equal(cause, Cause.addInterrupts(cause, Cause.interrupt(1)))
+      Cause.addInterrupts(cause, Cause.interrupt(2))
+      assert.are.equal(2, #cause.reasons)
+    end)
+  end)
+
+  describe("electDefects", function()
+    it("turns every Fail into a Die, in place, when the cause also has a Die", function()
+      local cause = Cause.fromReasons({
+        { _tag = "Fail", error = "a" },
+        { _tag = "Interrupt", fiberId = 1 },
+        { _tag = "Die", defect = "x", trace = "t" },
+        { _tag = "Fail", error = "b" },
+      })
+      local elected = Cause.electDefects(cause)
+      assert.are.same({ "Die", "Interrupt", "Die", "Die" }, tags(elected))
+      assert.are.same({ "a", "x", "b" }, (Cause.defects(elected)))
+      assert.is_nil(elected.reasons[1].trace)
+      assert.are.equal("t", elected.reasons[3].trace)
+      assert.are.same({ "Fail", "Interrupt", "Die", "Fail" }, tags(cause))
+    end)
+
+    it("returns a cause with only Fails, only Dies or only interrupts unchanged", function()
+      local causes = {
+        Cause.combine(Cause.fail("a"), Cause.interrupt(1)),
+        Cause.combine(Cause.die("x"), Cause.interrupt(1)),
+        Cause.interrupt(1),
+        Cause.empty,
+      }
+      for _, cause in ipairs(causes) do
+        assert.are.equal(cause, Cause.electDefects(cause))
+      end
+    end)
+  end)
+
+  describe("findRecoverableError", function()
+    it("returns true and the first error when there is no Die", function()
+      local cause = Cause.fromReasons({
+        { _tag = "Interrupt", fiberId = 1 },
+        { _tag = "Fail", error = "a" },
+        { _tag = "Fail", error = "b" },
+      })
+      assert.are.same({ true, "a" }, { Cause.findRecoverableError(cause) })
+    end)
+
+    it("returns true for a nil error", function()
+      local found, err = Cause.findRecoverableError(Cause.fail(nil))
+      assert.is_true(found)
+      assert.is_nil(err)
+    end)
+
+    it("returns false and the elected cause when there is a Die", function()
+      local found, rethrow =
+        Cause.findRecoverableError(Cause.combine(Cause.fail("a"), Cause.die("x")))
+      assert.is_false(found)
+      assert.are.same({ "Die", "Die" }, tags(rethrow))
+      assert.are.same({ "a", "x" }, (Cause.defects(rethrow)))
+    end)
+
+    it("returns false and the cause itself when there is neither Fail nor Die", function()
+      local cause = Cause.interrupt(1)
+      assert.are.same({ false, cause }, { Cause.findRecoverableError(cause) })
+      assert.are.same({ false, Cause.empty }, { Cause.findRecoverableError(Cause.empty) })
     end)
   end)
 

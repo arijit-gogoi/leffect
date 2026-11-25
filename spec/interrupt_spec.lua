@@ -120,6 +120,63 @@ describe("interruption", function()
     h.assertInterrupted(fiber:poll())
   end)
 
+  describe("the skip rule (4.1.5)", function()
+    local function failsAfterSleeping()
+      return Effect.uninterruptible(Effect.sleep(10):flatMap(function()
+        return Effect.fail("x")
+      end))
+    end
+
+    local function interruptedExit(effect)
+      local fiber = started(effect)
+      fiber:interruptUnsafe(7)
+      scheduler:runAll()
+      return fiber:poll()
+    end
+
+    local calls
+    local function handler()
+      calls = calls + 1
+      return Effect.succeed("recovered")
+    end
+    before_each(function()
+      calls = 0
+    end)
+
+    it("records the interrupt next to a failure from an uninterruptible region", function()
+      local cause = h.causeOf(interruptedExit(failsAfterSleeping()))
+      assert.are.same({ "Fail", "Interrupt" }, h.tags(cause))
+      assert.are.same({ "x" }, (Cause.failures(cause)))
+      assert.are.same({ 7 }, Cause.interruptors(cause))
+    end)
+
+    it("drops the failures when it skips a recovery handler", function()
+      local exit = interruptedExit(failsAfterSleeping():catchAll(handler))
+      assert.are.equal(0, calls)
+      assert.are.same({ "Interrupt" }, h.tags(h.causeOf(exit)))
+    end)
+
+    it("drops a finalizer's failure when it skips a recovery handler", function()
+      local exit = interruptedExit(Effect.never:ensuring(Effect.fail("cleanup")):catchAll(handler))
+      assert.are.equal(0, calls)
+      assert.are.same({ "Interrupt" }, h.tags(h.causeOf(exit)))
+    end)
+
+    it("keeps a finalizer's failure when it skips no recovery handler", function()
+      local cause = h.causeOf(interruptedExit(Effect.never:ensuring(Effect.fail("cleanup"))))
+      assert.are.same({ "Interrupt", "Fail" }, h.tags(cause))
+      assert.are.same({ "cleanup" }, (Cause.failures(cause)))
+    end)
+
+    it("keeps a finalizer's defect, even when it skips a recovery handler", function()
+      local exit = interruptedExit(Effect.never:ensuring(Effect.die("bug")):catchAll(handler))
+      assert.are.equal(0, calls)
+      local cause = h.causeOf(exit)
+      assert.are.same({ "Interrupt", "Die" }, h.tags(cause))
+      assert.are.same({ "bug" }, (Cause.defects(cause)))
+    end)
+  end)
+
   describe("uninterruptible", function()
     it("defers an interrupt until the region ends, and lets the region complete", function()
       local log, record = h.recorder()

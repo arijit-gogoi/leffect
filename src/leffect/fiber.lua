@@ -256,7 +256,9 @@ function methods:interruptUnsafe(fiberId)
   if self.exit then
     return
   end
-  self.interruptCause = Cause.combine(self.interruptCause or Cause.empty, Cause.interrupt(fiberId))
+  local cause = Cause.interrupt(fiberId)
+  local previous = self.interruptCause
+  self.interruptCause = previous and Cause.addInterrupts(previous, cause) or cause
   if not self.interruptible then
     return -- delivered later, by a Restore frame
   end

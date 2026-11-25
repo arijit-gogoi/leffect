@@ -57,20 +57,21 @@ Effect.map = core.map
 --- return value that is not an effect, is a defect.
 Effect.flatMap = core.flatMap
 
---- Recovers from an expected failure with the effect returned by `f(err)`.
---- Uses the first `Fail` of the cause. Defects and interruptions are not
---- caught; they keep propagating.
+--- Recovers from an expected failure with the effect returned by `f(err)`,
+--- where `err` is the first `Fail` of the cause. Interruptions are not caught.
+--- A cause with a defect is not recoverable: it keeps failing, with its
+--- failures elected to defects (`Cause.findRecoverableError`).
 ---@generic E
 ---@param self leffect.Effect
 ---@param f fun(err: E): leffect.Effect
 ---@return leffect.Effect
 function Effect.catchAll(self, f)
   return core.catchCause(self, function(cause)
-    local found, err = Cause.findError(cause)
+    local found, value = Cause.findRecoverableError(cause)
     if found then
-      return f(err)
+      return f(value)
     end
-    return exitFailCause(cause)
+    return exitFailCause(value)
   end)
 end
 
@@ -251,7 +252,7 @@ local function race(effects, firstExitWins)
               reasons[#reasons + 1] = lost[j]
             end
             if failed == count then
-              resume(exitFailCause(Cause.fromReasons(reasons)))
+              resume(exitFailCause(Cause.electDefects(Cause.fromReasons(reasons))))
             end
           end
         end)
