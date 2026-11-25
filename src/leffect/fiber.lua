@@ -83,7 +83,8 @@ local function sortedById(set)
   return list
 end
 
---- An effect that waits until every fiber in `fibers` is done.
+--- An effect that waits until every fiber in `fibers` is done, then succeeds
+--- with nil. Read each fiber's `exit` afterwards.
 ---@param fibers leffect.Fiber[]
 ---@return leffect.Effect
 local function awaitAll(fibers)
@@ -118,6 +119,8 @@ local function awaitAll(fibers)
     end
   end)
 end
+
+Fiber.awaitAll = awaitAll
 
 --- Interrupts every fiber in `fibers` on behalf of `fiberId`, then waits for
 --- all of them, finalizers included.

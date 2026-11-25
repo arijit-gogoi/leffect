@@ -2,7 +2,8 @@
 # Leffect: fiber and interruption design
 
 Status: settled for Milestone M1 on 2026-11-25, and re-pinned the same day.
-The M2 design (Part II, §18–§25) was drafted and approved on 2026-11-25.
+The M2 design (Part II, §18–§25) was drafted and approved on 2026-11-25,
+and M2 was built the same day, the items below the cut line included.
 
 **Reference:** Effect 4.1.5, which is the `effect@4.1.5` tag of
 `Effect-TS/effect` (commit `e3aca1f`). The files are
@@ -1890,7 +1891,7 @@ These make M2 done:
 7. `forkUnsafe`'s `"inherit"`, then `forEach` (one at a time, then
    concurrently), then `all`.
 
-Below the cut line, built last or deferred:
+Below the cut line, built last:
 
 8. The `"parallel"` finalizer strategy.
 9. `Effect.scopedWith` and `Scope.use`.

@@ -196,6 +196,84 @@ describe("Scope", function()
     end)
   end)
 
+  describe("with the parallel strategy", function()
+    it("runs the finalizers at the same time", function()
+      local scheduler = TestScheduler.new()
+      local scope = Scope.makeUnsafe("parallel")
+      local function slow(name)
+        return function()
+          return Effect.sleep(100):flatMap(function()
+            return finalizer(log, name)()
+          end)
+        end
+      end
+      addAll(scope, { slow("a"), slow("b") })
+      h.valueOf(scheduler:run(Scope.close(scope, Exit.void)))
+      assert.are.equal(100, scheduler:now())
+      assert.are.same({ "b", "a" }, names(log))
+    end)
+
+    it("fails with every finalizer's reasons, newest finalizer first", function()
+      local scheduler = TestScheduler.new()
+      local scope = Scope.makeUnsafe("parallel")
+      local function failsAfter(ms, err)
+        return function()
+          return Effect.sleep(ms):flatMap(function()
+            return Effect.fail(err)
+          end)
+        end
+      end
+      addAll(scope, { failsAfter(50, "first added"), failsAfter(100, "last added") })
+      local exit = scheduler:run(Scope.close(scope, Exit.void))
+      assert.are.same({ "last added", "first added" }, (Cause.failures(h.causeOf(exit))))
+      assert.are.equal(100, scheduler:now())
+    end)
+
+    it("lets a fiber forked into the scope close it without waiting for itself", function()
+      local scheduler = TestScheduler.new()
+      local scope = Effect.runSync(Scope.make("parallel"))
+      local program = Effect.forkIn(Scope.close(scope, Exit.void), scope):flatMap(function(fiber)
+        return fiber:join()
+      end)
+      h.valueOf(scheduler:run(program))
+      assert.are.equal("closed", scope.state)
+    end)
+
+    it("can be the strategy of a forked scope", function()
+      local scheduler = TestScheduler.new()
+      local parent = Scope.makeUnsafe()
+      local child = Effect.runSync(Scope.fork(parent, "parallel"))
+      assert.are.equal("parallel", child.strategy)
+      addAll(child, {
+        function()
+          return Effect.sleep(10)
+        end,
+        function()
+          return Effect.sleep(10)
+        end,
+      })
+      h.valueOf(scheduler:run(Scope.close(parent, Exit.void)))
+      assert.are.equal(10, scheduler:now())
+    end)
+  end)
+
+  describe("use", function()
+    it("provides the scope, then closes it with the effect's exit", function()
+      local scope = Scope.makeUnsafe()
+      local exit =
+        Effect.runSyncExit(Scope.use(
+          Effect.addFinalizer(finalizer(log, "a")):flatMap(function()
+            return Effect.scope
+          end),
+          scope
+        ))
+      assert.are.equal(scope, h.valueOf(exit))
+      assert.are.same({ "a" }, names(log))
+      assert.are.equal(scope, h.valueOf(log[1].exit))
+      assert.are.equal("closed", scope.state)
+    end)
+  end)
+
   it("makeUnsafe rejects an unknown strategy", function()
     assert.has_error(function()
       Scope.makeUnsafe("random")
@@ -287,6 +365,30 @@ describe("Effect.scoped", function()
   it("gives each run a fresh scope", function()
     local program = Effect.scoped(Effect.scope)
     assert.are_not.equal(Effect.runSync(program), Effect.runSync(program))
+  end)
+end)
+
+describe("Effect.scopedWith", function()
+  it("passes a fresh scope, and closes it with the effect's exit", function()
+    local log = {}
+    local given
+    local exit = Effect.runSyncExit(Effect.scopedWith(function(scope)
+      given = scope
+      return Scope.addFinalizerExit(scope, finalizer(log, "a")):flatMap(function()
+        return Effect.fail("e")
+      end)
+    end))
+    assert.are.same({ "e" }, (Cause.failures(h.causeOf(exit))))
+    assert.are.same({ "a" }, names(log))
+    assert.are.same({ "e" }, (Cause.failures(h.causeOf(log[1].exit))))
+    assert.are.equal("closed", given.state)
+  end)
+
+  it("leaves the context alone", function()
+    local exit = Effect.runSyncExit(Effect.scopedWith(function()
+      return Effect.scope
+    end))
+    assert.are.same({ "Die" }, h.tags(h.causeOf(exit)))
   end)
 end)
 

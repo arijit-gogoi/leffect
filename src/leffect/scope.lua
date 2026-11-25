@@ -8,12 +8,14 @@
 --- ```
 ---
 --- Finalizers run newest first, uninterruptibly, and each gets the exit the
---- scope was closed with. A failing finalizer doesn't stop the others. Most
---- code uses `Effect.scoped`, which gives an effect a fresh current scope and
---- closes it when the effect ends.
+--- scope was closed with. A failing finalizer doesn't stop the others. A
+--- `"parallel"` scope runs them at the same time instead. Most code uses
+--- `Effect.scoped`, which gives an effect a fresh current scope and closes it
+--- when the effect ends.
 
 local Cause = require("leffect.cause")
 local Context = require("leffect.context")
+local Fiber = require("leffect.fiber")
 local core = require("leffect.core")
 local runtime = require("leffect.runtime")
 
@@ -22,7 +24,7 @@ local error, setmetatable = error, setmetatable
 local exitFailCause, exitVoid = core.exitFailCause, core.exitVoid
 local OP_FAILURE = core.OP_FAILURE
 
----@alias leffect.Scope.Strategy "sequential"
+---@alias leffect.Scope.Strategy "sequential"|"parallel"
 
 ---@alias leffect.Scope.Finalizer fun(exit: leffect.Exit): leffect.Effect?
 
@@ -52,9 +54,10 @@ Scope.contextKey = "leffect/Scope"
 local function make(strategy, parent)
   if strategy == nil then
     strategy = "sequential"
-  elseif strategy ~= "sequential" then
+  elseif strategy ~= "sequential" and strategy ~= "parallel" then
     error(
-      'Scope: the finalizer strategy must be "sequential", got ' .. runtime.describe(strategy),
+      'Scope: the finalizer strategy must be "sequential" or "parallel", got '
+        .. runtime.describe(strategy),
       3
     )
   end
@@ -182,11 +185,54 @@ function Scope.addFinalizer(scope, effect)
   end)
 end
 
+--- The effect of running `finalizer(exit)`. A finalizer may return nil, and a
+--- throw becomes a Die with a traceback.
+---@param finalizer leffect.Scope.Finalizer
+---@param exit leffect.Exit
+---@return leffect.Effect
+local function finalizerEffect(finalizer, exit)
+  return core.suspend(function()
+    local effect = finalizer(exit)
+    if effect == nil then
+      return exitVoid
+    end
+    return effect
+  end)
+end
+
+--- Appends the reasons of a failed `result` to `reasons[1..count]`, and
+--- returns the new count.
+---@param reasons leffect.Cause.Reason[]
+---@param count integer
+---@param result leffect.Exit
+---@return integer
+local function addReasons(reasons, count, result)
+  if result._op == OP_FAILURE then
+    local lost = result.cause.reasons
+    for j = 1, #lost do
+      count = count + 1
+      reasons[count] = lost[j]
+    end
+  end
+  return count
+end
+
+--- Fails with `reasons[1..count]`, duplicates included, or succeeds with nil
+--- (v4's `exitAsVoidAll`).
+---@param reasons leffect.Cause.Reason[]
+---@param count integer
+---@return leffect.Exit
+local function voidAll(reasons, count)
+  if count == 0 then
+    return exitVoid
+  end
+  return exitFailCause(Cause.fromReasons(reasons))
+end
+
 --- Runs `finalizers[1..count]` one after the other, each isolated with
 --- `Effect.exit`, so a failure or a throw doesn't stop the next one. Fails
---- with every finalizer's reasons in run order, duplicates included (v4's
---- `exitAsVoidAll`), or succeeds with nil. A flatMap chain, so a long list
---- grows neither stack.
+--- with every finalizer's reasons in run order. A flatMap chain, so a long
+--- list grows neither stack.
 ---@param finalizers leffect.Scope.Finalizer[]
 ---@param count integer
 ---@param exit leffect.Exit
@@ -196,31 +242,43 @@ local function runInTurn(finalizers, count, exit)
     local reasons, failed = {}, 0
     local function step(i)
       if i > count then
-        if failed == 0 then
-          return exitVoid
-        end
-        return exitFailCause(Cause.fromReasons(reasons))
+        return voidAll(reasons, failed)
       end
-      local finalizer = finalizers[i]
-      local isolated = core.exit(core.suspend(function()
-        local effect = finalizer(exit)
-        if effect == nil then
-          return exitVoid
-        end
-        return effect
-      end))
-      return core.flatMap(isolated, function(result)
-        if result._op == OP_FAILURE then
-          local lost = result.cause.reasons
-          for j = 1, #lost do
-            failed = failed + 1
-            reasons[failed] = lost[j]
-          end
-        end
+      return core.flatMap(core.exit(finalizerEffect(finalizers[i], exit)), function(result)
+        failed = addReasons(reasons, failed, result)
         return step(i + 1)
       end)
     end
     return step(1)
+  end)
+end
+
+--- Runs `finalizers[1..count]` at the same time, each on a daemon fork of the
+--- closing fiber that inherits its interruptibility, so the forks are
+--- uninterruptible. Waits for them all, then fails with their reasons in
+--- fork order. Skips the finalizer keyed by the closing fiber: that is its
+--- own `forkIn` finalizer, which would wait for it to exit.
+---@param finalizers leffect.Scope.Finalizer[]
+---@param keys table[]
+---@param count integer
+---@param exit leffect.Exit
+---@return leffect.Effect
+local function runTogether(finalizers, keys, count, exit)
+  return core.withFiber(function(fiber)
+    local forks, n = {}, 0
+    for i = 1, count do
+      if keys[i] ~= fiber then
+        n = n + 1
+        forks[n] = Fiber.forkUnsafe(fiber, finalizerEffect(finalizers[i], exit), true, "inherit")
+      end
+    end
+    return core.flatMap(Fiber.awaitAll(forks), function()
+      local reasons, failed = {}, 0
+      for i = 1, n do
+        failed = addReasons(reasons, failed, forks[i].exit)
+      end
+      return voidAll(reasons, failed)
+    end)
   end)
 end
 
@@ -239,17 +297,21 @@ function Scope.closeUnsafe(scope, exit)
     Scope.removeFinalizerUnsafe(parent, scope)
   end
   local keys, finalizers = scope.keys, scope.finalizers
-  local newestFirst, count = {}, 0
+  local newestFirst, newestKeys, count = {}, {}, 0
   for i = scope.size, 1, -1 do
-    if keys[i] then
+    local key = keys[i]
+    if key then
       count = count + 1
       newestFirst[count] = finalizers[i]
+      newestKeys[count] = key
     end
   end
   scope.state, scope.exit = "closed", exit
   scope.keys, scope.finalizers, scope.slots, scope.size, scope.live = {}, {}, {}, 0, 0
   if count == 0 then
     return nil
+  elseif scope.strategy == "parallel" then
+    return runTogether(newestFirst, newestKeys, count, exit)
   end
   return runInTurn(newestFirst, count, exit)
 end
@@ -300,6 +362,17 @@ end
 ---@return leffect.Effect
 function Scope.provide(effect, scope)
   return Context.provide(Scope.contextKey, scope, effect)
+end
+
+--- Runs `effect` with `scope` as the current scope, then closes the scope with
+--- `effect`'s exit. The finalizers' failures are added to the exit.
+---@param effect leffect.Effect
+---@param scope leffect.Scope
+---@return leffect.Effect
+function Scope.use(effect, scope)
+  return core.onExit(Scope.provide(effect, scope), function(exit)
+    return Scope.closeUnsafe(scope, exit)
+  end)
 end
 
 return Scope

@@ -319,6 +319,20 @@ function Effect.scoped(self)
   end)
 end
 
+--- Runs `f(scope)` with a fresh scope passed as an argument, then closes the
+--- scope with the exit of the effect `f` returned. The scope doesn't become
+--- the current scope: the context stays as it is.
+---@param f fun(scope: leffect.Scope): leffect.Effect
+---@return leffect.Effect
+function Effect.scopedWith(f)
+  return core.suspend(function()
+    local scope = Scope.makeUnsafe()
+    return core.onExit(f(scope), function(exit)
+      return Scope.closeUnsafe(scope, exit)
+    end)
+  end)
+end
+
 --- Adds `f(exit)` to the current scope as a finalizer. `f` returns an effect
 --- or nil.
 ---@param f leffect.Scope.Finalizer
