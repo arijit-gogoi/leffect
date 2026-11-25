@@ -36,7 +36,8 @@ end
   uninterruptibly (§19.3), and its failure is added to the cause through the
   `OnExit` of `scoped` (§7.5).
 - v4 also runs the release with the context captured at acquire. In M2 the
-  context holds only the Scope, so that waits for M3 (§15).
+  context holds only the Scope, so that waits for M3 (§15). The M3 design
+  adds it (§26.5).
 
 ### 20.2 `acquireUseRelease`
 

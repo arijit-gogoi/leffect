@@ -7,7 +7,8 @@ Part II (M2) of the [Leffect specifications](README.md).
 v4 keeps a fiber's services in `fiber.context`. A fork starts with its
 parent's context, and `scoped` puts its Scope there. Context, Tag and Layer
 are M3. M2 needs only the current Scope, so it adds the field and the frame
-that restores it, but no public Context API.
+that restores it, but no public Context API. The M3 design makes the context
+public, with key objects instead of strings (§26).
 
 - **The table.** `fiber.context` is an immutable table of services keyed by
   strings, like v4's service keys. M2 uses one key, `"leffect/Scope"`.

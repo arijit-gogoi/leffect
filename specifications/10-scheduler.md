@@ -44,13 +44,17 @@ Build this first. `require("leffect.scheduler.test").new(options)`, where
 
 ### 10.3 luv adapter (M3, sketched so the interface is validated)
 
+Part III designs the adapter (§29). This sketch stays as the record of what M1
+checked; where the two differ, §29 holds.
+
 - `schedule`: push onto a queue. If no drain is pending, start a
   `uv.new_idle()` (or a 0 ms timer) that drains the whole queue, including
-  tasks added during the drain, then stops itself.
+  tasks added during the drain, then stops itself. (§29.2 runs one batch per
+  loop iteration instead, so that a busy fiber can't starve I/O.)
 - `after`: `uv.new_timer():start(ms, 0, cb)`. Cancel is `stop()` and
-  `close()`, made idempotent.
+  `close()`, made idempotent. (§29.3 also rounds `ms` up to an integer.)
 - `now`: `uv.now()`, which is cached loop time. Call `uv.update_time()` if
   precision matters.
 - Neovim: same adapter through `vim.uv`. Effects that call the Neovim API
   must wrap the call in `vim.schedule`, so that belongs in Neovim-specific
-  helpers, not the core.
+  helpers, not the core (§29.6).

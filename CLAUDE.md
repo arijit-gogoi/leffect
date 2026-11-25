@@ -102,9 +102,12 @@ specifications/     -- the runtime design, one file per topic
     the M1 spec list.
   - Part II (files `18`–`23`) covers M2: the fiber context, Scope, resources,
     typed catches, `forEach`/`all`, and the M2 spec list.
+  - Part III (files `26`–`30`) is the M3 design: services (Context, keys,
+    references), layers, `runCallback`, the luv scheduler, and the M3 spec
+    list. It awaits the user's approval.
 
-  Follow it for M1 and M2. Propose changes to the specifications before
-  deviating in code.
+  Follow it for M1 and M2, and for M3 once Part III is approved. Propose
+  changes to the specifications before deviating in code.
 - Effect v4's source, pinned to Effect 4.1.5: the `effect@4.1.5` tag of
   `Effect-TS/effect` (commit `e3aca1f`). Read
   `packages/effect/src/internal/effect.ts` and `internal/core.ts` for the run

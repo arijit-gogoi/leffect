@@ -6,7 +6,9 @@ number, and the numbers have not changed.
 
 Status: settled for Milestone M1 on 2026-11-25, and re-pinned the same day.
 The M2 design (Part II, §18–§25) was drafted and approved on 2026-11-25,
-and M2 was built the same day, the items below the cut line included.
+and M2 was built the same day, the items below the cut line included. The M3
+design (Part III, §26–§32) was drafted on 2026-11-26, and awaits the user's
+approval.
 
 **Reference:** Effect 4.1.5, which is the `effect@4.1.5` tag of
 `Effect-TS/effect` (commit `e3aca1f`). The files are
@@ -57,3 +59,19 @@ lists the deviations, and §25 the decisions taken on the user's behalf.
 | [21-typed-errors.md](21-typed-errors.md) | §21 Typed error recovery and `Effect.exit` |
 | [22-foreach.md](22-foreach.md) | §22 `forEach` and `all` |
 | [23-m2-plan.md](23-m2-plan.md) | §23 Specs for M2, §24 Implementation order, §25 Decisions |
+
+### Part III: M3
+
+Part III designs M3: services, layers, running effects with callbacks, and the
+luv scheduler. It follows 4.1.5, which has neither FiberRef nor Tag (§26). On
+top of the files above, it reads `Context.ts`, `Layer.ts`, `internal/layer.ts`
+and `Scheduler.ts`. §14 lists the deviations, and §32 the decisions taken on
+the user's behalf.
+
+| File | Sections |
+|---|---|
+| [26-services.md](26-services.md) | §26 Services: Context, keys and references |
+| [27-layers.md](27-layers.md) | §27 Layers |
+| [28-running.md](28-running.md) | §28 Run options, `runCallback`, and runners with a context |
+| [29-luv.md](29-luv.md) | §29 The luv scheduler |
+| [30-m3-plan.md](30-m3-plan.md) | §30 Specs for M3, §31 Implementation order, §32 Decisions |
