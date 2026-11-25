@@ -743,6 +743,9 @@ end
   an effect, so a child's failure fails the joiner, and a child's interrupt
   cause too. This is catchable by the joiner, because the joiner itself wasn't
   interrupted.
+- `Fiber.awaitAll(fibers)` waits for every fiber and succeeds with their
+  exits, in order, as v4's does. It is public from M2, which uses it for the
+  parallel scope strategy (§19.3). `Fiber.interruptAll` succeeds with nil.
 - **Parent exit means children are interrupted first** (§5.1). Shutdown runs
   uninterruptibly, so an interrupt arriving mid-shutdown can't strand
   children that are still cleaning up.
@@ -1177,6 +1180,7 @@ some outcomes; §17 lists the specs it adds and amends.
 | Result lists (M2) | Arrays | Lists with a field `n`, like `table.pack` | Results can be nil, and `#` can't count past a hole. |
 | `all` input (M2) | An iterable or a record, told apart by type; a record runs in insertion order | Told apart by keys; a record runs in sorted key order (§22.3) | A Lua table is both. `pairs` order is unspecified, and differs between runtimes. |
 | `all` options (M2) | `mode`, `"default"` or `"result"` | No `mode` | No Result type yet (§15). |
+| Concurrent `forEach` items that are Exits (M2) | Handled inline: a success costs no fork and no tick, and a failure stops the run before `f` is called on any later item | Every item gets a worker. With `concurrency = 3` and `f(1)` returning `Effect.fail(x)`, `f(2)` and `f(3)` are still called; their workers are interrupted before they start | One launch path, as §22.2 describes. The inline path is an optimization to add later (§15). |
 
 Everything else follows 4.1.5:
 - frames and `onPop`/`contAll`;
@@ -1217,6 +1221,9 @@ Everything else follows 4.1.5:
 - **A loop op for `forEach`:** v4 uses a `While` primitive. The `flatMap`
   chain of §22.2 is stack-safe, but allocates a frame and a closure per item.
   Add the op only if a benchmark asks for it.
+- **Inline Exits in concurrent `forEach`:** v4 handles an item whose effect is
+  already an Exit without forking it (§14). Adding that would save a fork and
+  a tick per such item, and stop calling `f` after a failing one.
 - **Structural equality:** `combine` dedupes with `==`. Structural dedupe
   waits for Equal/Hash ("Later" in CLAUDE.md).
 
