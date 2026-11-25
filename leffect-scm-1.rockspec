@@ -11,7 +11,9 @@ description = {
   summary = "An Effect TS-style effect system for Lua",
   detailed = [[
 Lazy effects as data, typed errors (Exit and Cause) and a stack-safe run loop,
-modelled on Effect TS. Fibers, interruption, resource safety and layers are
+modelled on Effect TS. Fibers with structured concurrency and cooperative
+interruption, finalizers, Scope and acquireRelease, generators on coroutines,
+and bounded concurrency with forEach and all. Services and layers are
 planned. Targets LuaJIT 2.1 and Lua 5.4.
 ]],
   homepage = "https://github.com/arijit-gogoi/leffect",
