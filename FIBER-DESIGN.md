@@ -426,7 +426,7 @@ evaluate.Failure = function(op, fiber)
       h, frame = nextHandler(fiber, onFailure)
     end
     if skipped then cause = withoutFails(cause) end -- drop the Fail reasons
-    cause = Cause.combine(cause, interrupted)        -- record the interrupt
+    cause = addInterrupts(cause, interrupted)        -- record the interrupt
   end
   if not h then
     fiber.finalExit = cause == op.cause and op or Exit.failCause(cause)
@@ -443,6 +443,11 @@ M1's, and the two changes to the cause are new with the re-pin (§17):
   cause that unwinds. Take a fiber interrupted inside an uninterruptible region
   that then fails: it now ends with the failure and the Interrupt, not with the
   failure alone.
+
+  `addInterrupts(cause, interrupted)` appends each Interrupt reason whose
+  `fiberId` the cause doesn't have yet, and leaves every other reason alone.
+  This is 4.1.5's `causeAddInterrupts`. `Cause.combine` would not do here: it
+  would also merge repeated Fail and Die reasons.
 - **Typed failures are dropped when a recovery handler is skipped.** A skipped
   `catchCause`-family frame would have handled the Fail reasons, so they leave
   the cause and the interrupt stands alone. Defects stay.
@@ -1281,7 +1286,8 @@ commit `30f4563`.
    - M1 runs `h` and ends with `Success(caught e)`, so the defect is lost
      without a trace.
    - 4.1.5 fails with `[Die(e), Die(d)]`, and `h` never runs.
-2. **The skip rule records the interrupt** (§5.3).
+2. **The skip rule records the interrupt** (§5.3). It appends only the
+   missing Interrupt reasons (`causeAddInterrupts`), and touches nothing else.
    - Example: a fiber interrupted inside
      `uninterruptible(sleep(10):flatMap(→ fail("x")))`.
    - M1 ends with `[Fail(x)]`, so the interrupt is lost.
@@ -1319,6 +1325,8 @@ These are unchanged between beta.98 and 4.1.5, so M1 still matches them:
   - With a Die, it returns `false` and the elected cause.
   - With neither a Fail nor a Die, it returns `false` and the cause.
 - When both causes are non-empty, `combine` also drops repeats within `a`.
+- `addInterrupts` appends only the Interrupt reasons whose `fiberId` is
+  missing. It keeps every other reason as it is, duplicates included.
 - `fail(e):ensuring(die(d)):catchAll(h)`: `h` doesn't run, and the exit is
   `[Die(e), Die(d)]`.
 - A finalizer that fails after a failure keeps both Fails. One that dies after
@@ -1690,9 +1698,15 @@ failure ends the chain, and later items never start.
 - **Launching.** Fork workers until `concurrency` are running.
   - They are daemons, forked with `uninterruptible = "inherit"` (4.1.5), so
     inside an uninterruptible region they are uninterruptible too.
-  - A worker's exit launches the next item. That happens in an observer,
-    outside the loop, so `f` runs under `xpcall` there. A throw becomes a Die
-    that ends the run like a failure.
+  - A worker's exit launches the next item.
+  - One launch function serves both the first batch, inside `register`, and
+    the refills, from worker observers. It calls `f` under `xpcall` both
+    times. A refill runs outside the loop, and a throw in `register` would
+    otherwise turn into a Die with no canceler.
+  - A throw from `f` ends the run like a worker failure. Nothing more is
+    launched, the workers already running are interrupted and awaited, and
+    then the run fails with the Die. Workers are daemons, so nothing else
+    would stop them. v4's `failDefect` does the same.
 - **Results.** A success stores its value at its own index, so the results
   keep input order whatever order the workers finish in.
 - **Failure** (4.1.5's `iterateConcurrent`):
@@ -1836,7 +1850,9 @@ new files: `spec/gen_spec.lua`, `catch_spec.lua`, `context_spec.lua`,
   - a second worker's non-interrupt failure is added, with defects elected.
 - Interrupting the parent interrupts every worker, and waits for them.
 - Inside `uninterruptible`, a failing worker doesn't cut the others short.
-- `f` throwing ends the run with a Die, and interrupts the running workers.
+- `f` throws on item 2 of the first batch, with `concurrency` of 2 or more.
+  Item 1's worker is interrupted, and its finalizer runs before `forEach`
+  fails with the Die. A throw during a later refill does the same.
 - An invalid `concurrency` is a defect.
 - `all`:
   - a list gives the values, with `n`;
