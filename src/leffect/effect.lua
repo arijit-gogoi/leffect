@@ -11,7 +11,8 @@ local Scope = require("leffect.scope")
 local core = require("leffect.core")
 local runtime = require("leffect.runtime")
 
-local error, setmetatable, time, xpcall = error, setmetatable, os.time, xpcall
+local error, getmetatable, pairs, setmetatable, time, type, xpcall =
+  error, getmetatable, pairs, setmetatable, os.time, type, xpcall
 
 local exitSucceed, exitFailCause = core.exitSucceed, core.exitFailCause
 local describe = runtime.describe
@@ -402,6 +403,72 @@ function Effect.provideContext(self, context)
   end)
 end
 
+-- leffect.layer requires this module, so it is required on first use.
+local Layer
+
+-- Feature-detected: LuaJIT has the global, Lua 5.4 the table field.
+local unpack = table.unpack or unpack -- luacheck: ignore 113 143
+
+local PROVIDE_EXPECTED = "Effect.provide: expected a Layer, a list of layers or a Context"
+
+--- The number of layers in `source` if it is a list of layers: a table with
+--- no metatable whose keys are 1 to n. Nil otherwise.
+---@param source any
+---@return integer?
+local function layerCount(source)
+  if type(source) ~= "table" or getmetatable(source) ~= nil then
+    return nil
+  end
+  local count = 0
+  for _ in pairs(source) do
+    count = count + 1
+  end
+  for i = 1, count do
+    if not Layer.isLayer(source[i]) then
+      return nil
+    end
+  end
+  return count
+end
+
+--- Runs `self` with the services of `source`: a Layer, a list of layers
+--- (merged), or a Context (specifications/27-layers.md §27.5). A layer is
+--- built into a new scope, which closes with `self`'s exit after `self`
+--- ends; if the build fails, `self` never runs. The build shares the layers
+--- of an outer `provide`, unless `options.fresh` is set. Anything else makes
+--- the effect die.
+---@param self leffect.Effect
+---@param source leffect.Layer|leffect.Layer[]|leffect.Context
+---@param options { fresh: boolean? }?
+---@return leffect.Effect
+function Effect.provide(self, source, options)
+  if Context.isContext(source) then
+    ---@cast source leffect.Context
+    return Effect.provideContext(self, source)
+  end
+  Layer = Layer or require("leffect.layer")
+  local layer = source
+  if not Layer.isLayer(source) then
+    local count = layerCount(source)
+    if count == nil then
+      return exitFailCause(Cause.die(PROVIDE_EXPECTED))
+    end
+    layer = Layer.mergeAll(unpack(source, 1, count))
+  end
+  ---@cast layer leffect.Layer
+  return Effect.scopedWith(function(scope)
+    local built
+    if options and options.fresh then
+      built = Layer.buildWithMemoMap(layer, Layer.makeMemoMapUnsafe(), scope)
+    else
+      built = Layer.buildWithScope(layer, scope)
+    end
+    return core.flatMap(built, function(context)
+      return Effect.provideContext(self, context)
+    end)
+  end)
+end
+
 -- Scope (specifications/19-scope.md §19) ------------------------------------
 
 local push = runtime.push
@@ -704,7 +771,7 @@ end
 -- forEach and all (specifications/22-foreach.md §22) ------------------------
 
 local floor, huge = math.floor, math.huge
-local pairs, sort, type = pairs, table.sort, type
+local sort = table.sort
 local OP_FAILURE = core.OP_FAILURE
 
 --- The most items that may run at once, or nil if `concurrency` is invalid.
@@ -1129,6 +1196,7 @@ methods.provideServiceEffect = Effect.provideServiceEffect
 methods.updateService = Effect.updateService
 methods.provideContext = Effect.provideContext
 methods.updateContext = Effect.updateContext
+methods.provide = Effect.provide
 methods.scoped = Effect.scoped
 methods.fork = Effect.fork
 methods.forkDaemon = Effect.forkDaemon

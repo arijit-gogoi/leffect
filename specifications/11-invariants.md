@@ -50,9 +50,9 @@ Each of these becomes at least one spec.
 19. **A release runs in the context of its acquire** (M3):
     `acquireRelease` and `Effect.addFinalizer` capture the context, and the
     raw Scope functions don't (§26.5).
-20. **A shared layer is built once per MemoMap, and released once** (M3
-    design), after the last scope that uses it closes (§27.4).
-21. **A failed layer build releases what it acquired** (M3 design) before the
+20. **A shared layer is built once per MemoMap, and released once** (M3),
+    after the last scope that uses it closes (§27.4).
+21. **A failed layer build releases what it acquired** (M3) before the
     failure comes out (§27.1, §27.5).
 22. **The luv scheduler never runs a task in the batch that queued it** (M3
     design), so I/O and timers get a turn between batches (§29.2).

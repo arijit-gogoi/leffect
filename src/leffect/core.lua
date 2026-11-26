@@ -46,6 +46,7 @@
 ---@field updateService fun(self: leffect.Effect, key: leffect.Context.Key, f: fun(current: any): any): leffect.Effect
 ---@field provideContext fun(self: leffect.Effect, context: leffect.Context): leffect.Effect
 ---@field updateContext fun(self: leffect.Effect, f: fun(context: leffect.Context): leffect.Context): leffect.Effect
+---@field provide fun(self: leffect.Effect, source: leffect.Layer|leffect.Context|table, opts: table?): leffect.Effect
 ---@field uninterruptible fun(self: leffect.Effect): leffect.Effect
 ---@field interruptible fun(self: leffect.Effect): leffect.Effect
 ---@field fork fun(self: leffect.Effect): leffect.Effect

@@ -31,6 +31,14 @@ module is `leffect.layer`, exported as `Layer`.
   express. `succeed`, `succeedContext`, `orDie`, `catchAll`, `catchCause` and
   `fresh` set `build` directly, as v4's do (`fromBuildUnsafe`): they add no
   scope of their own.
+- **Checks.** TypeScript's types catch these mistakes in v4; Leffect checks
+  at run time.
+  - A constructor or combinator given something other than a key or a layer
+    raises at once.
+  - A build dies if its service is nil, or if what should be a Context or a
+    layer isn't one. This covers the thunk of `sync` and `syncContext`, the
+    effect of `effect` and `effectContext`, and the functions given to
+    `suspend`, `flatMap`, `catchAll` and `catchCause`.
 
 ### 27.2 Constructors
 
@@ -70,12 +78,16 @@ constructor is needed for layers that acquire resources.
 **mergeAll** (Layer.ts 1209–1224):
 
 ```lua
-local function mergeAllEffect(layers, memoMap, scope)
+local function mergeAllEffect(layers, count, memoMap, scope)
   local parent = Scope.forkUnsafe(scope, "parallel")
   return Effect.forEach(layers, function(layer)
     return layer.build(memoMap, Scope.forkUnsafe(parent, "sequential"))
-  end, { concurrency = #layers }):map(function(contexts)
-    return Context.mergeAll(unpack(contexts, 1, contexts.n))
+  end, { concurrency = count }):map(function(contexts)
+    local merged = Context.empty()
+    for i = 1, contexts.n do
+      merged = Context.merge(merged, contexts[i])
+    end
+    return merged
   end)
 end
 ```
@@ -164,7 +176,11 @@ function Effect.provide(self, source, options)
   end
   local layer = source
   if not Layer.isLayer(source) then
-    layer = Layer.mergeAll(unpack(source)) -- a list of layers
+    local count = layerCount(source) -- nil unless it is a list of layers
+    if count == nil then
+      return Effect.die("Effect.provide: expected a Layer, a list of layers or a Context")
+    end
+    layer = Layer.mergeAll(unpack(source, 1, count))
   end
   return Effect.scopedWith(function(scope)
     local built
@@ -192,6 +208,7 @@ end
   for one layer (§14).
 - An empty list provides nothing. A table that is neither a Layer, a Context
   nor a list of layers makes the effect die with "Effect.provide: expected a
-  Layer, a list of layers or a Context".
+  Layer, a list of layers or a Context". A list is a table without a
+  metatable whose keys are 1 to n, each holding a layer.
 - `leffect.layer` requires `leffect.effect`. To break the cycle,
   `Effect.provide` requires `leffect.layer` when it is first called.

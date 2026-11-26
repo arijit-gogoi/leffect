@@ -96,7 +96,8 @@ No spec uses `Scope.contextKey`, so removing it changes no spec.
   - the release gets `eff`'s exit.
 - A failing build:
   - `eff` never runs, and the provide fails with the build's error;
-  - what earlier layers acquired is released.
+  - what earlier layers acquired is released, before the failure comes out:
+    a `catchAll` fallback is built after the release.
 - One layer used twice in a graph is built once.
   `mergeAll(A:provide(C), B:provide(C))` acquires C once. It releases C once,
   after A and B are released.
@@ -104,7 +105,9 @@ No spec uses `Scope.contextKey`, so removing it changes no spec.
   takes 100 ms, the graph above still builds C once, and A and B get the same
   instance.
 - A shared build that fails while two users wait for it fails both of them,
-  after one attempt.
+  after one attempt. A request that comes later builds again.
+- A request that comes after the last user released a shared build builds it
+  again.
 - `Layer.fresh(C)` builds C again, even in the same graph.
 - Sibling provides build their own copies: two `Effect.provide(x, C)` in a row
   acquire C twice.
