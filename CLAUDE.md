@@ -88,7 +88,8 @@ specifications/     -- the runtime design, one file per topic
   finalizers run on interrupt, a late callback is ignored.
 - **M2, ergonomics:** `gen` on coroutines, `catchTag`, `Scope`,
   `acquireRelease`, `all`/`race`/`forEach` with concurrency limits.
-- **M3, real world:** luv adapter, `runCallback`, Context/Tag/Layer, FiberRef.
+- **M3, real world:** luv adapter, `runCallback`, Context (`Context.Service`,
+  `Context.Reference`), Layer.
 - **Later:** concurrency primitives (Ref, Deferred, Queue, Semaphore, PubSub),
   Schedule, Clock/Random services, logging/tracing, Equal/Hash, then Stream,
   Schema, STM, platform modules.
@@ -102,12 +103,11 @@ specifications/     -- the runtime design, one file per topic
     the M1 spec list.
   - Part II (files `18`–`23`) covers M2: the fiber context, Scope, resources,
     typed catches, `forEach`/`all`, and the M2 spec list.
-  - Part III (files `26`–`30`) is the M3 design: services (Context, keys,
+  - Part III (files `26`–`30`) covers M3: services (Context, keys,
     references), layers, `runCallback`, the luv scheduler, and the M3 spec
-    list. It awaits the user's approval.
+    list. The user approved it on 2026-11-26.
 
-  Follow it for M1 and M2, and for M3 once Part III is approved. Propose
-  changes to the specifications before deviating in code.
+  Follow it. Propose changes to the specifications before deviating in code.
 - Effect v4's source, pinned to Effect 4.1.5: the `effect@4.1.5` tag of
   `Effect-TS/effect` (commit `e3aca1f`). Read
   `packages/effect/src/internal/effect.ts` and `internal/core.ts` for the run

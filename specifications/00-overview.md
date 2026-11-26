@@ -52,7 +52,7 @@ cancelers, `sleep`, `fork`/`forkDaemon`/`join`/`await`, `interrupt`/
 yielding, and the entry points `runFork`, `runSync` and `runSyncExit`.
 
 **Non-goals for M1:** `gen` (M2, as CLAUDE.md's milestones say; designed in
-§9), Scope (M2), Context/Layer/FiberRef (M3), an Option type (so no
+§9), Scope (M2), Context and Layer (M3), an Option type (so no
 `timeoutOption` yet), tracing and stack annotations, scheduler priorities,
 real-host adapters other than test (luv comes in M3).
 
@@ -69,7 +69,7 @@ real-host adapters other than test (luv comes in M3).
 in CLAUDE.md's M2 line apply to `forEach` and `all`.
 
 **Non-goals for M2:**
-- Context, Tag, Layer and FiberRef (M3);
+- the public Context, and Layer (M3);
 - a Result type, so `all` has no `mode: "result"`;
 - `Effect.fn`;
 - v4's `catchReason` and `catchReasons`;

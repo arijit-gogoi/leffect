@@ -48,8 +48,9 @@ module is `leffect.layer`, exported as `Layer`.
 | `Layer.unwrap(eff)` | yes | Builds the layer that `eff` succeeds with. Below the cut line. |
 
 "Shared" means memoized (§27.4). `succeed` and `succeedContext` skip the
-MemoMap, as in v4, since there is nothing to build. `Layer.effect` covers
-v3's `Layer.scoped`: in v4 the effect may use a Scope (Layer.ts 1039–1134).
+MemoMap, as in v4, since there is nothing to build. As in v4, the effect of
+`Layer.effect` may use the current Scope (Layer.ts 1039–1134), so no separate
+constructor is needed for layers that acquire resources.
 
 ### 27.3 Composition
 
@@ -123,8 +124,13 @@ This follows v4's `MemoMapImpl` (Layer.ts 253–275 and 418–469).
 - **The finalizer** decrements `observers`. The last one removes the entry,
   and closes the entry's scope with its exit. A shared layer is thus released
   once, after its last user.
-- **A failed build stays in its entry.** Later requests in the same map get
-  the same failure, without building again.
+- **A failed build is shared only while it runs.** Requests that arrive
+  during the build wait for it, and get the same failure without building
+  again.
+  - Each user's observer finalizer is on the layer scope that `fromBuild`
+    forked for it. `fromBuild` closes that scope when the build fails.
+  - So the last failing user removes the entry. A request that comes later
+    builds the layer again.
 - **The current MemoMap** is a service, `Layer.CurrentMemoMap`, under
   `"leffect/Layer/CurrentMemoMap"`. `buildWithMemoMap` provides it to the
   build, and adds it to the built context (Layer.ts 662–681).

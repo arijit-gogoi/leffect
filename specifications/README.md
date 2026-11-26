@@ -7,8 +7,8 @@ number, and the numbers have not changed.
 Status: settled for Milestone M1 on 2026-11-25, and re-pinned the same day.
 The M2 design (Part II, §18–§25) was drafted and approved on 2026-11-25,
 and M2 was built the same day, the items below the cut line included. The M3
-design (Part III, §26–§32) was drafted on 2026-11-26, and awaits the user's
-approval.
+design (Part III, §26–§32) was drafted and approved on 2026-11-26, and M3 is
+being built.
 
 **Reference:** Effect 4.1.5, which is the `effect@4.1.5` tag of
 `Effect-TS/effect` (commit `e3aca1f`). The files are
@@ -63,9 +63,9 @@ lists the deviations, and §25 the decisions taken on the user's behalf.
 ### Part III: M3
 
 Part III designs M3: services, layers, running effects with callbacks, and the
-luv scheduler. It follows 4.1.5, which has neither FiberRef nor Tag (§26). On
-top of the files above, it reads `Context.ts`, `Layer.ts`, `internal/layer.ts`
-and `Scheduler.ts`. §14 lists the deviations, and §32 the decisions taken on
+luv scheduler. It follows 4.1.5, whose service keys are `Context.Service` and
+`Context.Reference` (§26). On top of the files above, it reads `Context.ts`,
+`Layer.ts`, `internal/layer.ts` and `Scheduler.ts`. §14 lists the deviations, and §32 the decisions taken on
 the user's behalf.
 
 | File | Sections |

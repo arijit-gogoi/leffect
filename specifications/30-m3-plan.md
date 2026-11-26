@@ -103,7 +103,8 @@ No spec uses `Scope.contextKey`, so removing it changes no spec.
 - Requests that arrive while a shared build is running wait for it. When C
   takes 100 ms, the graph above still builds C once, and A and B get the same
   instance.
-- A shared build that fails fails both of its users, after one attempt.
+- A shared build that fails while two users wait for it fails both of them,
+  after one attempt.
 - `Layer.fresh(C)` builds C again, even in the same graph.
 - Sibling provides build their own copies: two `Effect.provide(x, C)` in a row
   acquire C twice.
@@ -235,14 +236,14 @@ Below the cut line, built last:
 ## 32. M3 decisions taken on the user's behalf (2026-11-26)
 
 The user asked for this design on 2026-11-25. These were decided here, and
-the user can veto any of them.
+the user approved them with the design on 2026-11-26. On 31 and 32 the user
+said: "We are tracking v4, not v3. So `Context.Reference` and
+`Context.Service` as per v4 are what we want."
 
-31. **FiberRef is `Context.Reference`** (§26.3). 4.1.5 has no FiberRef. A
+31. **Fiber-local values are `Context.Reference`s** (§26.3), as in v4. A
     Reference changes only for a region, and nothing merges on join.
-    CLAUDE.md's M3 line keeps the word "FiberRef" until the user approves a
-    new wording.
-32. **Tag is `Context.Service`** (§26.2), v4's name. There is no `Tag`
-    alias.
+    CLAUDE.md's M3 line uses v4's names.
+32. **Service keys are `Context.Service`s** (§26.2), as in v4.
 33. **Keys are effects** built on `WithFiber`. A missing service dies with
     "Service not found: " and the key (§26.2).
 34. **A service can't be nil.** A Reference's default can be (§26.1,

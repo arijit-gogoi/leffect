@@ -5,14 +5,13 @@ Part III (M3) of the [Leffect specifications](README.md).
 ## 26. Services
 
 M2 gave each fiber a context that holds only its Scope (§18). M3 makes the
-context public, following v4's `Context` module (`Context.ts` at 4.1.5). Two
-names in CLAUDE.md's M3 line no longer exist in v4:
-- **Tag.** v4 calls a service key a Service: `Context.Service("app/Database")`.
-- **FiberRef.** v4 has no FiberRef module. A fiber-local value is a
-  `Context.Reference`, a key with a default value. Its value changes only when
-  a new one is provided for a region (§26.3).
+context public, following v4's `Context` module (`Context.ts` at 4.1.5):
+- **A service key** is a Service: `Context.Service("app/Database")`.
+- **A fiber-local value** is a `Context.Reference`, a key with a default
+  value. Its value changes only when a new one is provided for a region
+  (§26.3).
 
-Leffect follows v4 in both cases (decisions 31 and 32).
+Leffect tracks v4, so these are its only kinds of key (decisions 31 and 32).
 
 ### 26.1 Context values
 
@@ -97,7 +96,7 @@ end)
   `Context.Service<Self, Shape>()(id, { make })`, which is TypeScript syntax
   (§14).
 
-### 26.3 References, v4's replacement for FiberRef
+### 26.3 References
 
 ```lua
 local LogLevel = Context.Reference("app/LogLevel", {
@@ -117,18 +116,11 @@ local LogLevel = Context.Reference("app/LogLevel", {
 - If `defaultValue` throws, nothing is cached. The lookup dies with the error
   and its traceback, and the next lookup calls `defaultValue` again.
 - The default may be nil. A provided value may not (§26.1).
-
-The FiberRef operations of Effect v3 map onto v4, and so onto M3, as follows:
-
-| v3 | v4, and M3 |
-|---|---|
-| `FiberRef.make(initial)` | `Context.Reference(key, { defaultValue })` |
-| `FiberRef.get(ref)` | the Reference itself, run as an effect |
-| `Effect.locally(eff, ref, value)` | `Effect.provideService(eff, ref, value)` |
-| `Effect.locallyWith(eff, ref, f)` | `Effect.updateService(eff, ref, f)` |
-| `Effect.locallyScoped(ref, value)` | `Effect.updateServiceScoped(ref, f)`, below the cut line |
-| `FiberRef.set`, `update`, `modify` | none: a value can't change outside a region |
-| a fork copies the value, and a join merges it back | a fork starts with its parent's context (§18), and a join merges nothing |
+- Running the Reference reads it. `provideService` and `updateService`
+  change it for a region, and `updateServiceScoped` for the rest of a scope
+  (§26.4). Nothing else changes it.
+- A fork starts with its parent's context (§18), and a join merges nothing
+  back.
 
 v4 also has built-in references: the log level, the tracer settings, the
 scheduler and the op budget. The first two belong to modules that are Later in
