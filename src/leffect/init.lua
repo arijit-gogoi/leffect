@@ -26,9 +26,11 @@ return {
   Effect = require("leffect.effect"),
   Exit = require("leffect.exit"),
   Fiber = require("leffect.fiber"),
+  Latch = require("leffect.latch"),
   Layer = require("leffect.layer"),
   Ref = require("leffect.ref"),
   Scope = require("leffect.scope"),
+  Semaphore = require("leffect.semaphore"),
   --- Runs an effect from an `Effect.gen` body; the same function the body
   --- gets as its argument.
   run = require("leffect.runtime").run,
