@@ -24,6 +24,7 @@ local sync = core.sync
 
 ---A mutable cell shared by fibers.
 ---@class leffect.Ref
+---@field current any
 ---@field get fun(self: leffect.Ref): leffect.Effect
 ---@field set fun(self: leffect.Ref, value: any): leffect.Effect
 ---@field getAndSet fun(self: leffect.Ref, value: any): leffect.Effect

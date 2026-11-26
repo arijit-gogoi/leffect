@@ -275,13 +275,17 @@ describe("Deferred", function()
   end)
 
   it("raises when given something other than a Deferred", function()
+    ---@diagnostic disable-next-line: missing-fields
     local ok, err = pcall(Deferred.await, {})
     assert.is_false(ok)
+    ---@diagnostic disable-next-line: param-type-mismatch
     assert.matches("Deferred.await: expected a Deferred", err)
     assert.has_error(function()
+      ---@diagnostic disable-next-line: param-type-mismatch
       Deferred.completeWith(Deferred.makeUnsafe(), 5)
     end)
     assert.has_error(function()
+      ---@diagnostic disable-next-line: missing-fields
       Deferred.into(Effect.void, {})
     end)
   end)

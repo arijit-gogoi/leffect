@@ -123,6 +123,7 @@ describe("Ref", function()
   it("isn't an effect: running it dies with Not a valid effect", function()
     local ref = Ref.makeUnsafe(1)
     local exit = Effect.runSyncExit(Effect.gen(function(run)
+      ---@diagnostic disable-next-line: param-type-mismatch
       return run(ref)
     end))
     assert.matches("^Not a valid effect", h.causeOf(exit).reasons[1].defect)
@@ -148,10 +149,13 @@ describe("Ref", function()
   end)
 
   it("raises when given something other than a Ref or a function", function()
+    ---@diagnostic disable-next-line: missing-fields
     local ok, err = pcall(Ref.get, {})
     assert.is_false(ok)
+    ---@diagnostic disable-next-line: param-type-mismatch
     assert.matches("Ref.get: expected a Ref, got table", err)
     assert.has_error(function()
+      ---@diagnostic disable-next-line: param-type-mismatch
       Ref.update(Ref.makeUnsafe(1), 5)
     end)
     assert.is_true(Ref.isRef(Ref.makeUnsafe(1)))
