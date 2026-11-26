@@ -72,3 +72,9 @@ Each of these becomes at least one spec.
     drops it (§37).
 27. **A subscription gets each message accepted while it is subscribed, once
     and in order** (M4), unless a sliding hub drops the message (§38).
+28. **Equal values hash alike** (M5 design). For every pair of built-in
+    values, `Equal.equals(a, b)` implies `Hash.hash(a) == Hash.hash(b)`, on
+    both runtimes (§44).
+29. **Equality and hashing end, and don't raise, on built-in values** (M5
+    design), cycles included. Only a user `__equals` or `__hash` can raise,
+    and the next call starts clean (§44.5).

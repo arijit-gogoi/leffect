@@ -48,6 +48,12 @@ Part I (the runtime, M1) of the [Leffect specifications](README.md).
 | Queue views (M4) | `asEnqueue`, `asDequeue`, `isEnqueue`, `isDequeue`, `flush`, `flushUnsafe` | Not provided | The first four concern TypeScript types. `flush` forces a deferred wake task, which Leffect doesn't have (§37.5). |
 | Counts (M4) | Semaphore permits and Queue capacities aren't checked | They must be non-negative integers, or the call raises | Lua has no static types (§33.5). |
 | Type guards (M4) | Only `Deferred.isDeferred`, `Queue.isQueue` and `PubSub.isPubSub` | Also `Ref.isRef`, `SynchronizedRef.isSynchronizedRef`, `Latch.isLatch`, `Semaphore.isSemaphore` and `PubSub.isSubscription` | Lua has no static types, so each primitive gets a type check, as Context's keys do (§26.1). |
+| Instances (M5 design) | A class instance without `Equal` compares structurally | A table with a metatable but no `__equals` compares by reference | Leffect's runtime objects are such tables, and comparing them structurally would walk fibers and schedulers (decision 66, §44.1). |
+| The protocol (M5 design) | `[Equal.symbol]` and `[Hash.symbol]` are properties, own or inherited | `__equals` and `__hash` are metatable fields, read with `rawget`. A plain table can't carry them | The Lua idiom, and the lookup runs no code (decision 67, §44.3). |
+| Caches (M5 design) | Hashes and outermost results are cached across calls, so values must not change after | Memoized within one top-level call only | Lua code changes plain tables all the time (decision 68, §44.4). |
+| Hash values (M5 design) | MurmurHash mixing on 32 bits; strings by UTF-16 code unit | Arithmetic mod 2^31 − 1; strings by byte; `Hash.random` counts | No bitwise operators in the common subset (decisions 69 and 70, §46.1). |
+| Equal's API (M5 design) | `equals(that)` returns a predicate; `byReference`, `makeCompareSet`, `makeCompareMap`, `Hash.optimize` | Not provided | nil is a value, so arity can't select the curried form. Lua has no transparent proxy. The rest wait for HashSet and HashMap (§45). |
+| `Cause.combine` (M5 design) | Calls user hash and equality methods unguarded | Guards them with `pcall`, and falls back to `==` | The runtime never throws (decision 72, §47.1). |
 
 Everything else follows 4.1.5:
 - frames and `onPop`/`contAll`;
@@ -126,3 +132,7 @@ Everything else follows 4.1.5:
 - **The cost of a wake pass (M4):** each pass walks its line from the start.
   v4's Semaphore keeps a lower bound on the requests, so that a scan can stop
   early. Add that, or an index, if a benchmark asks for it.
+- **Equivalence and Data (M5 design):** v4's `Equivalence` module (combinators
+  for equivalence functions) and `Data` (structural classes and tagged
+  errors) build on Equal. M5 leaves both out, and so `makeCompareSet` and
+  `makeCompareMap` (§45).

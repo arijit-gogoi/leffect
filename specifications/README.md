@@ -10,7 +10,8 @@ and M2 was built the same day, the items below the cut line included. The M3
 design (Part III, §26–§32) was drafted and approved on 2026-11-26, and M3 was
 built the same day, the items below the cut line included. The M4 design
 (Part IV, §33–§41) was drafted and approved on 2026-11-26, and M4 was
-built the same day, the items below the cut line included.
+built the same day, the items below the cut line included. The M5 design
+(Part V, §44–§50) was drafted on 2026-11-26, and awaits approval.
 
 **Reference:** Effect 4.1.5, which is the `effect@4.1.5` tag of
 `Effect-TS/effect` (commit `e3aca1f`). The files are
@@ -100,3 +101,19 @@ behalf.
 | [37-queue.md](37-queue.md) | §37 Queue |
 | [38-pubsub.md](38-pubsub.md) | §38 PubSub |
 | [39-m4-plan.md](39-m4-plan.md) | §39 Specs for M4, §40 Implementation order, §41 Decisions |
+
+### Part V: M5
+
+Part V designs M5: structural equality and hashing. It follows 4.1.5's
+`Equal.ts` and `Hash.ts`, with `internal/equal.ts` and `internal/hash.ts`.
+Neither imports anything from the runtime, so M5 depends on no earlier Part.
+Below the cut line, Cause, Exit, `Cause.Done` and Context get their own
+equality. §14 lists the deviations, and §50 the decisions taken on the user's
+behalf.
+
+| File | Sections |
+|---|---|
+| [44-equality.md](44-equality.md) | §44 Equal and Hash: the shared model, §45 Equal |
+| [46-hash.md](46-hash.md) | §46 Hash |
+| [47-runtime-values.md](47-runtime-values.md) | §47 Cause, Exit, Done and Context |
+| [48-m5-plan.md](48-m5-plan.md) | §48 Specs for M5, §49 Implementation order, §50 Decisions |

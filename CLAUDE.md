@@ -100,8 +100,10 @@ specifications/     -- the runtime design, one file per topic
   `Context.Reference`), Layer.
 - **M4, concurrency primitives:** Ref, Deferred, Latch, Semaphore, Queue,
   PubSub.
-- **Later:** Schedule, Clock/Random services, logging/tracing, Equal/Hash,
-  then Stream, Schema, STM, platform modules.
+- **M5, equality:** Equal and Hash; below the cut line, equality for Cause,
+  Exit, `Cause.Done` and Context.
+- **Later:** Schedule, Clock/Random services, logging/tracing, then Stream,
+  Schema, STM, platform modules.
 
 ## Reference
 
@@ -118,6 +120,8 @@ specifications/     -- the runtime design, one file per topic
   - Part IV (files `33`–`39`) covers M4: the shared rules for waiting and
     waking, Ref, Deferred, Latch, Semaphore, Queue, PubSub, and the M4 spec
     list. The user approved it on 2026-11-26.
+  - Part V (files `44`–`48`) covers M5: Equal, Hash, equality for the
+    runtime's values, and the M5 spec list. It awaits the user's approval.
 
   Follow it. Propose changes to the specifications before deviating in code.
 - Effect v4's source, pinned to Effect 4.1.5: the `effect@4.1.5` tag of
