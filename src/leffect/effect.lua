@@ -288,6 +288,8 @@ end
 -- Context.add's message, for the effects that die instead of raising.
 local NIL_SERVICE = "Context.add: a service can't be nil"
 
+local NO_SCOPE = "Effect.scope: no Scope in context; wrap the effect in Effect.scoped"
+
 ---@param key any
 ---@param name string The public function, for the message.
 local function checkKey(key, name)
@@ -365,6 +367,61 @@ function Effect.updateService(self, key, f)
     end
     return Effect.provideService(self, key, updated)
   end)
+end
+
+local MISSING = setmetatable({}, { __name = "leffect.MISSING" })
+
+local function missing()
+  return MISSING
+end
+
+---@class leffect.UpdateServiceScopedOptions
+---@field reset (fun(original: any, updated: any, current: any): any)? The value to put back when the scope closes.
+
+--- Sets `f(current)` under `key` for the rest of the current scope, on the
+--- fiber's own context. When the scope closes, the finalizer puts the
+--- original back, unless the fiber's value has changed since;
+--- `options.reset(original, updated, current)` replaces that rule. Dies for a
+--- missing Service, and outside a scope. The one context change that no
+--- frame undoes (invariant 15).
+---@param key leffect.Context.Key
+---@param f fun(current: any): any
+---@param options leffect.UpdateServiceScopedOptions?
+---@return leffect.Effect
+function Effect.updateServiceScoped(key, f, options)
+  checkKey(key, "Effect.updateServiceScoped")
+  local reset = options and options.reset
+  return runtime.uninterruptible(core.withFiber(function(fiber)
+    local original = Context.getOrElse(fiber.context, key, missing)
+    if original == MISSING then
+      return exitFailCause(Cause.die("Service not found: " .. key.key))
+    end
+    local scope = Context.getOrElse(fiber.context, Scope.Scope, noop)
+    if scope == nil then
+      return exitFailCause(Cause.die(NO_SCOPE))
+    end
+    local updated = f(original)
+    if updated == nil then
+      return exitFailCause(Cause.die(NIL_SERVICE))
+    end
+    fiber.context = Context.add(fiber.context, key, updated)
+    return Scope.addFinalizerExit(scope, function()
+      local current = Context.getOrElse(fiber.context, key, missing)
+      if current == MISSING then
+        return nil
+      end
+      local value
+      if reset then
+        value = reset(original, updated, current)
+      elseif current == updated then
+        value = original
+      else
+        return nil
+      end
+      fiber.context = Context.add(fiber.context, key, value)
+      return nil
+    end)
+  end))
 end
 
 local getContext = core.withFiber(function(fiber)
@@ -478,9 +535,7 @@ local push = runtime.push
 Effect.scope = core.withFiber(function(fiber)
   local scope = Context.getOrElse(fiber.context, Scope.Scope, noop)
   if scope == nil then
-    return exitFailCause(
-      Cause.die("Effect.scope: no Scope in context; wrap the effect in Effect.scoped")
-    )
+    return exitFailCause(Cause.die(NO_SCOPE))
   end
   return exitSucceed(scope)
 end)
@@ -1143,11 +1198,12 @@ end
 ---@param options leffect.RunOptions
 ---@param context leffect.Context
 ---@param name string
+---@param level integer Where the missing-scheduler error points.
 ---@return leffect.Fiber
-local function fork(effect, options, context, name)
+local function fork(effect, options, context, name, level)
   local scheduler = options and options.scheduler
   if not scheduler then
-    error(name .. ": options.scheduler is required", 3)
+    error(name .. ": options.scheduler is required", level)
   end
   local fiber = startRoot(effect, scheduler, context, not options.uninterruptible)
   local onFiberStart = options.onFiberStart
@@ -1163,7 +1219,25 @@ end
 ---@param options leffect.RunOptions
 ---@return leffect.Fiber
 function Effect.runFork(effect, options)
-  return fork(effect, options, Context.empty(), "Effect.runFork")
+  return fork(effect, options, Context.empty(), "Effect.runFork", 3)
+end
+
+--- `runCallback` with root context `context`.
+---@param effect leffect.Effect
+---@param options leffect.RunCallbackOptions
+---@param context leffect.Context
+---@param name string
+---@param level integer Where the missing-scheduler error points.
+---@return fun(fiberId: integer?) interrupt
+local function runCallback(effect, options, context, name, level)
+  local fiber = fork(effect, options, context, name, level + 1)
+  local onExit = options.onExit
+  if onExit then
+    fiber:addObserver(onExit)
+  end
+  return function(fiberId)
+    fiber:interruptUnsafe(fiberId)
+  end
 end
 
 --- `runFork`, then `options.onExit(exit)` once the fiber ends (v4's
@@ -1176,28 +1250,19 @@ end
 ---@param options leffect.RunCallbackOptions
 ---@return fun(fiberId: integer?) interrupt
 function Effect.runCallback(effect, options)
-  local fiber = fork(effect, options, Context.empty(), "Effect.runCallback")
-  local onExit = options.onExit
-  if onExit then
-    fiber:addObserver(onExit)
-  end
-  return function(fiberId)
-    fiber:interruptUnsafe(fiberId)
-  end
+  return runCallback(effect, options, Context.empty(), "Effect.runCallback", 3)
 end
 
---- Runs `effect` synchronously on a fiber of its own and returns its Exit.
---- An Exit is returned as is. Never throws. An effect that doesn't finish
---- synchronously (it waits for a timer, say) is interrupted, so that its
---- finalizers run, and the result is `Die(Cause.AsyncFiberError(fiber))`.
+--- `runSyncExit` with root context `context`.
 ---@param effect leffect.Effect
+---@param context leffect.Context
 ---@return leffect.Exit
-function Effect.runSyncExit(effect)
+local function runSyncExit(effect, context)
   if core.isExit(effect) then
     return effect --[[@as leffect.Exit]]
   end
   local scheduler = newSyncScheduler()
-  local fiber = startRoot(effect, scheduler, Context.empty(), true)
+  local fiber = startRoot(effect, scheduler, context, true)
   scheduler:flush()
   local exit = fiber.exit
   if exit then
@@ -1210,16 +1275,84 @@ function Effect.runSyncExit(effect)
   return exitFailCause(Cause.die(Cause.AsyncFiberError(fiber)))
 end
 
+--- Runs `effect` synchronously on a fiber of its own and returns its Exit.
+--- An Exit is returned as is. Never throws. An effect that doesn't finish
+--- synchronously (it waits for a timer, say) is interrupted, so that its
+--- finalizers run, and the result is `Die(Cause.AsyncFiberError(fiber))`.
+---@param effect leffect.Effect
+---@return leffect.Exit
+function Effect.runSyncExit(effect)
+  return runSyncExit(effect, Context.empty())
+end
+
+--- The success value of `exit`; for a failure, throws `Cause.squash` of the
+--- cause.
+---@param exit leffect.Exit
+---@return any
+local function valueOrThrow(exit)
+  if exit._op == core.OP_FAILURE then
+    error(Cause.squash(exit.cause), 0)
+  end
+  return exit.value
+end
+
 --- Runs `effect` synchronously and returns its success value. On failure it
 --- throws `Cause.squash` of the cause: the first error, else the first defect.
 ---@param effect leffect.Effect
 ---@return any
 function Effect.runSync(effect)
-  local exit = Effect.runSyncExit(effect)
-  if exit._op == core.OP_FAILURE then
-    error(Cause.squash(exit.cause), 0)
+  return valueOrThrow(runSyncExit(effect, Context.empty()))
+end
+
+-- Runners with a context (specifications/28-running.md §28.3) ----------------
+
+---@param context any
+---@param name string The public function, for the message.
+local function checkRunContext(context, name)
+  if not Context.isContext(context) then
+    error(name .. ": expected a Context, got " .. describe(context), 3)
   end
-  return exit.value
+end
+
+--- A `runFork` whose root fibers start with `context`, such as services
+--- built once with `Layer.buildWithScope`.
+---@param context leffect.Context
+---@return fun(effect: leffect.Effect, options: leffect.RunOptions): leffect.Fiber
+function Effect.runForkWith(context)
+  checkRunContext(context, "Effect.runForkWith")
+  return function(effect, options)
+    return fork(effect, options, context, "Effect.runForkWith", 3)
+  end
+end
+
+--- A `runCallback` whose root fibers start with `context`.
+---@param context leffect.Context
+---@return fun(effect: leffect.Effect, options: leffect.RunCallbackOptions): fun(fiberId: integer?)
+function Effect.runCallbackWith(context)
+  checkRunContext(context, "Effect.runCallbackWith")
+  return function(effect, options)
+    return runCallback(effect, options, context, "Effect.runCallbackWith", 3)
+  end
+end
+
+--- A `runSyncExit` whose root fibers start with `context`.
+---@param context leffect.Context
+---@return fun(effect: leffect.Effect): leffect.Exit
+function Effect.runSyncExitWith(context)
+  checkRunContext(context, "Effect.runSyncExitWith")
+  return function(effect)
+    return runSyncExit(effect, context)
+  end
+end
+
+--- A `runSync` whose root fibers start with `context`.
+---@param context leffect.Context
+---@return fun(effect: leffect.Effect): any
+function Effect.runSyncWith(context)
+  checkRunContext(context, "Effect.runSyncWith")
+  return function(effect)
+    return valueOrThrow(runSyncExit(effect, context))
+  end
 end
 
 local methods = core.methods

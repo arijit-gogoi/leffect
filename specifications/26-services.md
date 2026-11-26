@@ -178,6 +178,16 @@ end
   fiber's context without pushing a `SetContext` frame, so the change outlasts
   the call. The finalizer it adds to the scope puts the original back, as in
   v4.
+  - The finalizer changes the context of the fiber that made the update,
+    whichever fiber closes the scope. It compares that fiber's current value
+    with the one it set.
+  - Under `Effect.scoped`, the `SetContext` frame of `scoped` has already put
+    the outer context back when the finalizer runs. The finalizer matters for
+    a scope that a region doesn't undo, such as one inherited at fork.
+  - It looks up the key and the scope before it changes anything. A missing
+    Service dies with "Service not found", and a missing scope with
+    `Effect.scope`'s message. v4 changes the context first, and then fails on
+    the scope.
 - `Scope.Scope` is the key of the current scope, `"leffect/Scope"`, as in v4.
   It replaces M2's `Scope.contextKey` string. `Effect.scope` keeps M2's error
   message (§19.2). `run(Scope.Scope)` outside a scope dies with the generic

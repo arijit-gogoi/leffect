@@ -259,3 +259,39 @@ describe("run options", function()
     end, "Effect.runCallback: options.scheduler is required")
   end)
 end)
+
+describe("runners with a context", function()
+  local Context = leffect.Context
+  local K = Context.Service("test/runner")
+  local context = Context.make(K, "given")
+
+  it("start the root fibers of runForkWith and runCallbackWith with the context", function()
+    local scheduler = TestScheduler.new()
+    local fiber = Effect.runForkWith(context)(K, { scheduler = scheduler })
+    local exits = {}
+    Effect.runCallbackWith(context)(K, {
+      scheduler = scheduler,
+      onExit = function(exit)
+        exits[#exits + 1] = exit
+      end,
+    })
+    scheduler:runAll()
+    assert.are.equal("given", h.valueOf(fiber.exit))
+    assert.are.equal("given", h.valueOf(exits[1]))
+  end)
+
+  it("start the root fibers of runSyncWith and runSyncExitWith with the context", function()
+    assert.are.equal("given", Effect.runSyncWith(context)(K))
+    assert.are.equal("given", h.valueOf(Effect.runSyncExitWith(context)(K)))
+    assert.has_error(function()
+      Effect.runSyncWith(Context.empty())(K)
+    end, "Service not found: test/runner")
+  end)
+
+  it("raise when given something other than a Context", function()
+    assert.has_error(function()
+      ---@diagnostic disable-next-line: missing-fields
+      Effect.runForkWith({})
+    end)
+  end)
+end)

@@ -455,6 +455,111 @@ it("has provideService and the other service functions as methods", function()
   assert.are.equal(1, Effect.runSync(viaUpdate))
 end)
 
+describe("Effect.updateServiceScoped", function()
+  local Exit = leffect.Exit
+
+  local function counter()
+    return Context.Reference("test/counter", {
+      defaultValue = function()
+        return 0
+      end,
+    })
+  end
+
+  local function inc(n)
+    return n + 1
+  end
+
+  it("sets the value for the rest of the scope", function()
+    local Ref = counter()
+    local program = Effect.scoped(Effect.updateServiceScoped(Ref, inc):flatMap(function()
+      return Ref
+    end)):flatMap(function(inside)
+      return Ref:map(function(after)
+        return { inside, after }
+      end)
+    end)
+    assert.are.same({ 1, 0 }, Effect.runSync(program))
+  end)
+
+  -- A child forked inside Scope.provide inherits the scope in its context,
+  -- with no frame on its own stack that would restore the context: `body`
+  -- runs there, then closes the scope.
+  local function inChild(scope, body)
+    return Scope.provide(Effect.fork(body), scope):flatMap(function(fiber)
+      return fiber:join()
+    end)
+  end
+
+  it("puts the original back when the scope closes", function()
+    local Ref, scope = counter(), Scope.makeUnsafe()
+    local body = Effect.updateServiceScoped(Ref, inc):flatMap(function()
+      return Ref:flatMap(function(during)
+        return Scope.close(scope, Exit.void):flatMap(function()
+          return Ref:map(function(after)
+            return { during, after }
+          end)
+        end)
+      end)
+    end)
+    assert.are.same({ 1, 0 }, h.valueOf(TestScheduler.new():run(inChild(scope, body))))
+  end)
+
+  it("leaves a value that changed since", function()
+    local Ref, outer, inner = counter(), Scope.makeUnsafe(), Scope.makeUnsafe()
+    -- Ref goes 0 -> 1 in the outer scope. Then the fiber moves to the inner
+    -- scope, with no frame, and Ref goes 1 -> 2 there. When the outer scope
+    -- closes, its finalizer sees 2, a value it didn't set, and leaves it.
+    local body = Effect.updateServiceScoped(Ref, inc)
+      :flatMap(function()
+        return Effect.updateServiceScoped(Scope.Scope, function()
+          return inner
+        end)
+      end)
+      :flatMap(function()
+        return Effect.updateServiceScoped(Ref, inc)
+      end)
+      :flatMap(function()
+        return Scope.close(outer, Exit.void)
+      end)
+      :flatMap(function()
+        return Effect.all({ Ref, Scope.Scope })
+      end)
+    local result = h.valueOf(TestScheduler.new():run(inChild(outer, body)))
+    assert.are.equal(2, result[1])
+    assert.are.equal(outer, result[2])
+  end)
+
+  it("lets options.reset choose the value when the scope closes", function()
+    local Ref, scope = counter(), Scope.makeUnsafe()
+    local seen
+    local options = {
+      reset = function(original, updated, current)
+        seen = { original, updated, current }
+        return 42
+      end,
+    }
+    local body = Effect.updateServiceScoped(Ref, inc, options):flatMap(function()
+      return Scope.close(scope, Exit.void):flatMap(function()
+        return Ref
+      end)
+    end)
+    assert.are.equal(42, h.valueOf(TestScheduler.new():run(inChild(scope, body))))
+    assert.are.same({ 0, 1, 1 }, seen)
+  end)
+
+  it("dies for a missing Service, and outside a scope", function()
+    local missing = Effect.scoped(Effect.updateServiceScoped(A, inc))
+    local cause = h.causeOf(Effect.runSyncExit(missing))
+    assert.are.equal("Service not found: test/A", cause.reasons[1].defect)
+    cause = h.causeOf(Effect.runSyncExit(Effect.updateServiceScoped(counter(), inc)))
+    assert.are.equal(
+      "Effect.scope: no Scope in context; wrap the effect in Effect.scoped",
+      cause.reasons[1].defect
+    )
+  end)
+end)
+
 describe("the release context", function()
   it("gives an acquireRelease release the services provided around it", function()
     local seen = {}

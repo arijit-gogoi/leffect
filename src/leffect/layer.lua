@@ -48,7 +48,11 @@ local describe = runtime.describe
 ---@field orDie fun(self: leffect.Layer): leffect.Layer
 ---@field catchAll fun(self: leffect.Layer, f: fun(err: any): leffect.Layer): leffect.Layer
 ---@field catchCause fun(self: leffect.Layer, f: fun(cause: leffect.Cause): leffect.Layer): leffect.Layer
+---@field catchTag fun(self: leffect.Layer, tag: string|string[], f: fun(err: table): leffect.Layer): leffect.Layer
 ---@field fresh fun(self: leffect.Layer): leffect.Layer
+---@field tap fun(self: leffect.Layer, f: fun(context: leffect.Context): leffect.Effect): leffect.Layer
+---@field tapError fun(self: leffect.Layer, f: fun(err: any): leffect.Effect): leffect.Layer
+---@field tapCause fun(self: leffect.Layer, f: fun(cause: leffect.Cause): leffect.Effect): leffect.Layer
 
 ---The builds shared within one build of a layer graph (§27.4).
 ---@class leffect.Layer.MemoMap
@@ -571,19 +575,95 @@ function Layer.provideMerge(self, that)
   return provideWith(self, that, "Layer.provideMerge", selfOverThat)
 end
 
+--- `flatMap`, naming `name` in the message for a non-layer.
+---@param self leffect.Layer
+---@param f fun(context: leffect.Context): leffect.Layer
+---@param name string
+---@return leffect.Layer
+local function flatMap(self, f, name)
+  return Layer.fromBuild(function(memoMap, scope)
+    return core.flatMap(self.build(memoMap, scope), function(context)
+      local layer = f(context)
+      if not Layer.isLayer(layer) then
+        return dieNotLayer(name, layer)
+      end
+      return layer.build(memoMap, scope)
+    end)
+  end)
+end
+
 --- Builds `self`, then the layer `f(context)`, and gives its services.
 ---@param self leffect.Layer
 ---@param f fun(context: leffect.Context): leffect.Layer
 ---@return leffect.Layer
 function Layer.flatMap(self, f)
   checkLayer(self, "Layer.flatMap", 2)
+  return flatMap(self, f, "Layer.flatMap")
+end
+
+local UnwrapKey = Context.Service("leffect/Layer/unwrap")
+
+local function unwrapped(context)
+  return Context.get(context, UnwrapKey)
+end
+
+--- Builds the layer that `effect` succeeds with. `effect` runs with the
+--- layer's scope as its current scope, as in `Layer.effect`.
+---@param effect leffect.Effect
+---@return leffect.Layer
+function Layer.unwrap(effect)
+  return flatMap(Layer.effect(UnwrapKey, effect), unwrapped, "Layer.unwrap")
+end
+
+--- Runs `f(context)` after `self` builds, with the layer's scope as the
+--- current scope, and keeps `self`'s services. A failure of `f`'s effect
+--- fails the build.
+---@param self leffect.Layer
+---@param f fun(context: leffect.Context): leffect.Effect
+---@return leffect.Layer
+function Layer.tap(self, f)
+  checkLayer(self, "Layer.tap", 2)
   return Layer.fromBuild(function(memoMap, scope)
     return core.flatMap(self.build(memoMap, scope), function(context)
-      local layer = f(context)
-      if not Layer.isLayer(layer) then
-        return dieNotLayer("Layer.flatMap", layer)
-      end
-      return layer.build(memoMap, scope)
+      return Scope.provide(Effect.as(f(context), context), scope)
+    end)
+  end)
+end
+
+--- Runs `f(err)` when the build fails with an expected error, with the
+--- layer's scope as the current scope, then fails with the same error.
+---@param self leffect.Layer
+---@param f fun(err: any): leffect.Effect
+---@return leffect.Layer
+function Layer.tapError(self, f)
+  checkLayer(self, "Layer.tapError", 2)
+  return Layer.fromBuild(function(memoMap, scope)
+    return Effect.catchAll(self.build(memoMap, scope), function(err)
+      return Scope.provide(
+        core.flatMap(f(err), function()
+          return Effect.fail(err)
+        end),
+        scope
+      )
+    end)
+  end)
+end
+
+--- Runs `f(cause)` when the build fails, with the layer's scope as the
+--- current scope, then fails with the same cause.
+---@param self leffect.Layer
+---@param f fun(cause: leffect.Cause): leffect.Effect
+---@return leffect.Layer
+function Layer.tapCause(self, f)
+  checkLayer(self, "Layer.tapCause", 2)
+  return Layer.fromBuild(function(memoMap, scope)
+    return core.catchCause(self.build(memoMap, scope), function(cause)
+      return Scope.provide(
+        core.flatMap(f(cause), function()
+          return exitFailCause(cause)
+        end),
+        scope
+      )
     end)
   end)
 end
@@ -611,6 +691,25 @@ function Layer.catchAll(self, f)
       local layer = f(err)
       if not Layer.isLayer(layer) then
         return dieNotLayer("Layer.catchAll", layer)
+      end
+      return layer.build(memoMap, scope)
+    end)
+  end)
+end
+
+--- When the build fails with an error whose `_tag` is `tag`, or one of the
+--- tags in a list, builds the layer `f(err)` instead. Other failures go on.
+---@param self leffect.Layer
+---@param tag string|string[]
+---@param f fun(err: table): leffect.Layer
+---@return leffect.Layer
+function Layer.catchTag(self, tag, f)
+  checkLayer(self, "Layer.catchTag", 2)
+  return fromBuildUnsafe(function(memoMap, scope)
+    return Effect.catchTag(self.build(memoMap, scope), tag, function(err)
+      local layer = f(err)
+      if not Layer.isLayer(layer) then
+        return dieNotLayer("Layer.catchTag", layer)
       end
       return layer.build(memoMap, scope)
     end)
@@ -727,6 +826,10 @@ methods.flatMap = Layer.flatMap
 methods.orDie = Layer.orDie
 methods.catchAll = Layer.catchAll
 methods.catchCause = Layer.catchCause
+methods.catchTag = Layer.catchTag
 methods.fresh = Layer.fresh
+methods.tap = Layer.tap
+methods.tapError = Layer.tapError
+methods.tapCause = Layer.tapCause
 
 return Layer

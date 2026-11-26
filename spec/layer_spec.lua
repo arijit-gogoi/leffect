@@ -602,3 +602,91 @@ describe("Layer.isLayer", function()
     assert.are.same({ 1, 2, n = 2 }, Effect.runSync(Effect.provide(Effect.all({ KA, KB }), L)))
   end)
 end)
+
+describe("Layer.unwrap", function()
+  it(
+    "builds the layer the effect succeeds with, running the effect with the layer's scope",
+    function()
+      local log = {}
+      local L = Layer.unwrap(Effect.acquireRelease(logged(log, "acquire"), function()
+        return logged(log, "release")
+      end):as(Layer.succeed(K, "unwrapped")))
+      Effect.runSync(Effect.provide(
+        K:flatMap(function(v)
+          return logged(log, v)
+        end),
+        L
+      ))
+      assert.are.same({ "acquire", "unwrapped", "release" }, log)
+    end
+  )
+
+  it("dies when the effect succeeds with something other than a layer", function()
+    local cause =
+      h.causeOf(Effect.runSyncExit(Effect.provide(Effect.void, Layer.unwrap(Effect.succeed(1)))))
+    assert.are.equal("Layer.unwrap: expected a Layer, got 1", cause.reasons[1].defect)
+  end)
+end)
+
+describe("Layer taps", function()
+  it("tap runs an effect with the built context, and keeps the services", function()
+    local seen
+    local L = Layer.succeed(K, "v"):tap(function(context)
+      return Effect.sync(function()
+        seen = Context.get(context, K)
+      end)
+    end)
+    assert.are.equal("v", Effect.runSync(Effect.provide(K, L)))
+    assert.are.equal("v", seen)
+  end)
+
+  it("tapError runs an effect with the error, and keeps failing", function()
+    local seen
+    local L = Layer.effect(K, Effect.fail("boom")):tapError(function(err)
+      return Effect.sync(function()
+        seen = err
+      end)
+    end)
+    local cause = h.causeOf(Effect.runSyncExit(Effect.provide(Effect.void, L)))
+    assert.are.equal("boom", cause.reasons[1].error)
+    assert.are.equal("boom", seen)
+  end)
+
+  it("tapCause runs an effect with the cause, and keeps failing", function()
+    local seen
+    local L = Layer.effect(K, Effect.die("defect")):tapCause(function(cause)
+      return Effect.sync(function()
+        seen = h.tags(cause)
+      end)
+    end)
+    local cause = h.causeOf(Effect.runSyncExit(Effect.provide(Effect.void, L)))
+    assert.are.same({ "Die" }, h.tags(cause))
+    assert.are.same({ "Die" }, seen)
+  end)
+
+  it("run their effects with the layer's scope", function()
+    local log = {}
+    local L = Layer.succeed(K, "v"):tap(function()
+      return Effect.acquireRelease(logged(log, "acquire"), function()
+        return logged(log, "release")
+      end)
+    end)
+    Effect.runSync(Effect.provide(logged(log, "use"), L))
+    assert.are.same({ "acquire", "use", "release" }, log)
+  end)
+end)
+
+describe("Layer.catchTag", function()
+  it("builds the fallback layer for a tagged error, and keeps failing for others", function()
+    local notFound = Layer.effect(K, Effect.fail({ _tag = "NotFound" }))
+    local recovered = notFound:catchTag("NotFound", function(err)
+      return Layer.succeed(K, "recovered " .. err._tag)
+    end)
+    assert.are.equal("recovered NotFound", Effect.runSync(Effect.provide(K, recovered)))
+    local other = Layer.effect(K, Effect.fail({ _tag = "Other" })):catchTag("NotFound", function()
+      return Layer.succeed(K, "unused")
+    end)
+    local cause = h.causeOf(Effect.runSyncExit(Effect.provide(K, other)))
+    assert.are.equal("Other", cause.reasons[1].error._tag)
+  end)
+end)
