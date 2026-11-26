@@ -349,3 +349,17 @@ approved".
     - the Queue functions `takeN`, `takeBetween`, `collect` and `into`;
     - queues of capacity 0;
     - PubSub's `takeBetween` and replay.
+
+After M4 was built, the user reviewed the result on 2026-11-26 and asked for
+one change: "`shutdown` should be as per v4."
+
+64. **`PubSub.shutdown` follows v4** (§38.3). It ends the subscriptions
+    first, and that frees room, so waiting publishes are accepted and succeed
+    with true. Only the publishers still waiting after that are interrupted.
+    This replaces the earlier reading of §38.3, under which every waiting
+    publish was interrupted.
+
+    v4 parity needed a second change, to decision 55. A taker that was
+    already woken when its subscription closes gets the messages its wake
+    pass counted for it. In v4 they would already be in its Deferred. Before
+    this, the messages were dropped and the taker interrupted itself (§38.2).
