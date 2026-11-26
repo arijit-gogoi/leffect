@@ -434,6 +434,17 @@ onFailure.OnExit = function(frame, cause, fiber)
   return runFinalizer(frame.f, exitFailCause(cause), fiber)
 end
 
+--- Pushes an exit frame for the effect that the current `withFiber` step
+--- returns (specifications/33-primitives.md §33.2, 4.1.5's `onExitUnsafe`).
+--- `f(exit)` runs uninterruptibly however that effect ends, and returns an
+--- effect or nil. Pushed in the step that registers a waiter, so no interrupt
+--- can land in between.
+---@param fiber leffect.FiberState
+---@param f fun(exit: leffect.Exit): leffect.Effect?
+function runtime.onExitUnsafe(fiber, f)
+  push(fiber, { _op = core.OP_ON_EXIT, f = f })
+end
+
 -- Async (specifications/06-async.md §6) -------------------------------------
 
 evaluate.Async = function(op, fiber)

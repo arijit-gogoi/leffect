@@ -411,6 +411,34 @@ function Cause.TimeoutError(message)
   )
 end
 
+local DoneMT = {
+  __name = "leffect.Cause.Done",
+  __tostring = function()
+    return "Done"
+  end,
+}
+
+local DONE = setmetatable({ _tag = "Done" }, DoneMT)
+
+--- The error that marks a normal end, of a queue for instance
+--- (specifications/37-queue.md §37.1, 4.1.5's `Cause.Done`). Without a value
+--- it returns one shared table.
+---@param value any
+---@return { _tag: "Done", value: any }
+function Cause.Done(value)
+  if value == nil then
+    return DONE
+  end
+  return setmetatable({ _tag = "Done", value = value }, DoneMT)
+end
+
+--- Whether `value` was made by `Cause.Done`. A plain `{ _tag = "Done" }` isn't.
+---@param value any
+---@return boolean
+function Cause.isDone(value)
+  return getmetatable(value) == DoneMT
+end
+
 --- The defect `Effect.runSync` dies with when the effect doesn't finish
 --- synchronously.
 ---@param fiber table The fiber that didn't finish.
