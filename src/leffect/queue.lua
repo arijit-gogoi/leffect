@@ -438,17 +438,6 @@ function Queue.make(options)
   end)
 end
 
---- A new queue, outside an effect. Takes the same options as `make`.
----@param options { capacity: number?, strategy: ("suspend"|"dropping"|"sliding")? }?
----@return leffect.Queue
-function Queue.makeUnsafe(options)
-  if options ~= nil and type(options) ~= "table" then
-    error("Queue.makeUnsafe: expected an options table, got " .. describe(options), 2)
-  end
-  options = options or {}
-  return new(options.capacity, options.strategy, "Queue.makeUnsafe")
-end
-
 --- A queue of capacity `n`, whose offers wait when it is full.
 ---@param n integer
 ---@return leffect.Effect
