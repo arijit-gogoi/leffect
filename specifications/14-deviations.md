@@ -33,6 +33,9 @@ Part I (the runtime, M1) of the [Leffect specifications](README.md).
 | `Effect.scope` without a scope (M3) | `Effect.scope` is the Scope key, so it dies with "Service not found: effect/Scope" | `Effect.scope` keeps M2's message; `Scope.Scope` gives the generic one | M2's message names the fix (§26.4). |
 | `provide`'s `local` option (M3) | `{ local: true }` | `{ fresh = true }` | `local` is a Lua keyword (§27.5). |
 | `Layer.catch` (M3) | `Layer.catch` | `Layer.catchAll` | Matches `Effect.catchAll` (decision 25, §27.3). |
+| Argument checks (M3) | TypeScript's types reject a non-key, a non-layer or a non-Context | Constructors and combinators raise; builds and `Effect.provide` die | Lua has no static types (§26.1, §27.1, §27.5). |
+| `Effect.updateContext`'s result (M3) | Not checked | The effect dies when `f` returns something other than a Context | A non-Context would break every later lookup in the region (§26.4). |
+| `updateServiceScoped` order (M3) | Changes the context, then looks up the scope, so a missing scope fails after the change | Looks up the key and the scope first, and changes nothing if either is missing | A failed call shouldn't leave the context changed (§26.4). |
 
 Everything else follows 4.1.5:
 - frames and `onPop`/`contAll`;
