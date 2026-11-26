@@ -154,7 +154,8 @@ This follows v4's `MemoMapImpl` (Layer.ts 253–275 and 418–469).
     build their own copies. v4 documents this behavior for `Effect.provide`.
 - **The Deferred is internal.** It holds an exit and a list of waiters. It is
   awaited with `async`, and completed once, the way `fiber:await` works with
-  observers. A public Deferred is Later (CLAUDE.md).
+  observers. M4 designs a public Deferred (§35.1). Once that is built, the
+  MemoMap uses it, as v4's does.
 
 ### 27.5 Building and providing
 

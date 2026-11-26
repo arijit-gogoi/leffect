@@ -8,7 +8,8 @@ Status: settled for Milestone M1 on 2026-11-25, and re-pinned the same day.
 The M2 design (Part II, §18–§25) was drafted and approved on 2026-11-25,
 and M2 was built the same day, the items below the cut line included. The M3
 design (Part III, §26–§32) was drafted and approved on 2026-11-26, and M3 was
-built the same day, the items below the cut line included.
+built the same day, the items below the cut line included. The M4 design
+(Part IV, §33–§41) was drafted on 2026-11-26, and awaits the user's approval.
 
 **Reference:** Effect 4.1.5, which is the `effect@4.1.5` tag of
 `Effect-TS/effect` (commit `e3aca1f`). The files are
@@ -75,3 +76,26 @@ the user's behalf.
 | [28-running.md](28-running.md) | §28 Run options, `runCallback`, and runners with a context |
 | [29-luv.md](29-luv.md) | §29 The luv scheduler |
 | [30-m3-plan.md](30-m3-plan.md) | §30 Specs for M3, §31 Implementation order, §32 Decisions |
+
+### Part IV: M4
+
+Part IV designs M4: the concurrency primitives. They are Ref, Deferred, Latch,
+Semaphore, Queue and PubSub, with SynchronizedRef below the cut line. It
+follows 4.1.5's modules:
+- `Ref.ts`, `SynchronizedRef.ts`, `Deferred.ts` and `Latch.ts`;
+- `Latch` in `internal/effect.ts` (line 5943);
+- `Semaphore.ts`, `Queue.ts` and `PubSub.ts`.
+
+Leffect's wakeups are always scheduled, so §33 adapts how waiters wait and
+wake. §14 lists the deviations, and §41 the decisions taken on the user's
+behalf.
+
+| File | Sections |
+|---|---|
+| [33-primitives.md](33-primitives.md) | §33 Concurrency primitives: the shared rules |
+| [34-ref.md](34-ref.md) | §34 Ref and SynchronizedRef |
+| [35-deferred.md](35-deferred.md) | §35 Deferred and Latch |
+| [36-semaphore.md](36-semaphore.md) | §36 Semaphore |
+| [37-queue.md](37-queue.md) | §37 Queue |
+| [38-pubsub.md](38-pubsub.md) | §38 PubSub |
+| [39-m4-plan.md](39-m4-plan.md) | §39 Specs for M4, §40 Implementation order, §41 Decisions |

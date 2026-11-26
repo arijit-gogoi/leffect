@@ -92,9 +92,10 @@ specifications/     -- the runtime design, one file per topic
   `acquireRelease`, `all`/`race`/`forEach` with concurrency limits.
 - **M3, real world:** luv adapter, `runCallback`, Context (`Context.Service`,
   `Context.Reference`), Layer.
-- **Later:** concurrency primitives (Ref, Deferred, Queue, Semaphore, PubSub),
-  Schedule, Clock/Random services, logging/tracing, Equal/Hash, then Stream,
-  Schema, STM, platform modules.
+- **M4, concurrency primitives:** Ref, Deferred, Latch, Semaphore, Queue,
+  PubSub.
+- **Later:** Schedule, Clock/Random services, logging/tracing, Equal/Hash,
+  then Stream, Schema, STM, platform modules.
 
 ## Reference
 
@@ -108,6 +109,9 @@ specifications/     -- the runtime design, one file per topic
   - Part III (files `26`–`30`) covers M3: services (Context, keys,
     references), layers, `runCallback`, the luv scheduler, and the M3 spec
     list. The user approved it on 2026-11-26.
+  - Part IV (files `33`–`39`) covers M4: the shared rules for waiting and
+    waking, Ref, Deferred, Latch, Semaphore, Queue, PubSub, and the M4 spec
+    list. It awaits the user's approval: don't build M4 before then.
 
   Follow it. Propose changes to the specifications before deviating in code.
 - Effect v4's source, pinned to Effect 4.1.5: the `effect@4.1.5` tag of
