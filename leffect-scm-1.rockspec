@@ -58,6 +58,7 @@ build = {
     ["leffect.scheduler.test"] = "src/leffect/scheduler/test.lua",
     ["leffect.scope"] = "src/leffect/scope.lua",
     ["leffect.semaphore"] = "src/leffect/semaphore.lua",
+    ["leffect.synchronizedref"] = "src/leffect/synchronizedref.lua",
     ["leffect.waitlist"] = "src/leffect/waitlist.lua",
   },
 }

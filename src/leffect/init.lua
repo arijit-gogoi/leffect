@@ -33,6 +33,7 @@ return {
   Ref = require("leffect.ref"),
   Scope = require("leffect.scope"),
   Semaphore = require("leffect.semaphore"),
+  SynchronizedRef = require("leffect.synchronizedref"),
   --- Runs an effect from an `Effect.gen` body; the same function the body
   --- gets as its argument.
   run = require("leffect.runtime").run,
