@@ -5,6 +5,7 @@
 local leffect = require("leffect")
 local Context = leffect.Context
 local Effect = leffect.Effect
+local Scope = leffect.Scope
 local TestScheduler = require("leffect.scheduler.test")
 local h = require("spec.helpers")
 
@@ -162,15 +163,20 @@ describe("Context", function()
       assert.are.equal(outer, seen)
     end)
 
-    it("runs a scope's finalizers in the outer context", function()
+    -- M2's spec used Effect.addFinalizer, whose finalizers now run in the
+    -- context where they were added (26-services.md §26.5).
+    it("runs a raw Scope finalizer in the outer context", function()
       local program = Effect.scoped(Effect.scope:flatMap(function(outer)
-        local seen
-        return Effect.scoped(Effect.addFinalizer(function()
-          return Effect.scope:map(function(current)
-            seen = current
+        local seenScope, seenK = nil, "unset"
+        local addRaw = Effect.scope:flatMap(function(inner)
+          return Scope.addFinalizerExit(inner, function()
+            return Effect.all({ Effect.scope, service(K) }):map(function(list)
+              seenScope, seenK = list[1], list[2]
+            end)
           end)
-        end)):map(function()
-          return seen == outer
+        end)
+        return Effect.scoped(Effect.provideService(addRaw, K, "inner")):map(function()
+          return seenScope == outer and seenK == nil
         end)
       end))
       assert.is_true(Effect.runSync(program))

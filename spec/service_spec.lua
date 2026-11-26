@@ -455,6 +455,68 @@ it("has provideService and the other service functions as methods", function()
   assert.are.equal(1, Effect.runSync(viaUpdate))
 end)
 
+describe("the release context", function()
+  it("gives an acquireRelease release the services provided around it", function()
+    local seen = {}
+    local acquired = Effect.acquireRelease(Effect.succeed("resource"), function(resource)
+      return Effect.all({ probe(A), probe(B) }):map(function(list)
+        seen.resource, seen.a, seen.b = resource, list[1], list[2]
+      end)
+    end)
+    -- The scope closes after the provideService regions have ended, where A
+    -- is "closing" and B is missing.
+    local program = Effect.provideService(
+      Effect.scoped(Effect.provideService(Effect.provideService(acquired, B, "b"), A, "acquired")),
+      A,
+      "closing"
+    )
+    Effect.runSync(program)
+    assert.are.same({ resource = "resource", a = "acquired", b = "b" }, seen)
+  end)
+
+  it("gives an Effect.addFinalizer finalizer its services, and its own scope", function()
+    local seen, inner = {}, nil
+    local add = Effect.scope:flatMap(function(scope)
+      inner = scope
+      return Effect.addFinalizer(function()
+        return Effect.all({ probe(A), Effect.scope }):map(function(list)
+          seen.a, seen.scope = list[1], list[2]
+        end)
+      end)
+    end)
+    local outer
+    local program = Effect.scoped(Effect.scope:flatMap(function(scope)
+      outer = scope
+      return Effect.scoped(Effect.provideService(add, A, "added"))
+    end))
+    Effect.runSync(program)
+    assert.are.equal("added", seen.a)
+    assert.is_not_nil(inner)
+    assert.are.equal(inner, seen.scope)
+    assert.are_not.equal(outer, seen.scope)
+  end)
+
+  it("lets the captured services win over the closing fiber's", function()
+    local seen
+    local add = Effect.addFinalizer(function()
+      return probe(A):map(function(v)
+        seen = v
+      end)
+    end)
+    -- scopedWith closes the scope inside the outer region, where A is
+    -- "closing".
+    local program = Effect.provideService(
+      Effect.scopedWith(function(scope)
+        return Scope.provide(Effect.provideService(add, A, "captured"), scope)
+      end),
+      A,
+      "closing"
+    )
+    Effect.runSync(program)
+    assert.are.equal("captured", seen)
+  end)
+end)
+
 describe("Scope.Scope", function()
   it("is the key of the current scope", function()
     local same = Effect.scoped(Effect.all({ Scope.Scope, Effect.scope })):map(function(list)

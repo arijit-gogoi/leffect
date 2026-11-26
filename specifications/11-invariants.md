@@ -47,7 +47,7 @@ Each of these becomes at least one spec.
 18. **`forEach` keeps input order** (M2). It never runs more than
     `concurrency` items at once, and it returns only after every worker it
     started has exited (§22).
-19. **A release runs in the context of its acquire** (M3 design):
+19. **A release runs in the context of its acquire** (M3):
     `acquireRelease` and `Effect.addFinalizer` capture the context, and the
     raw Scope functions don't (§26.5).
 20. **A shared layer is built once per MemoMap, and released once** (M3

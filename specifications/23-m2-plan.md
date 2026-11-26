@@ -47,8 +47,8 @@ new files: `spec/gen_spec.lua`, `catch_spec.lua`, `context_spec.lua`,
 - After a nested `scoped` ends, by success, failure or interrupt,
   `Effect.scope` sees the outer scope again.
 - A scope's finalizers run in the outer context: inside one, `Effect.scope`
-  is the outer scope. (The M3 design narrows this to finalizers added with the
-  raw Scope functions; see §26.5 and §30.)
+  is the outer scope. (M3 narrowed this to finalizers added with the raw
+  Scope functions; see §26.5 and §30.)
 - When the body of a nested `scoped` is interrupted at its first step, the
   inner scope still closes, and a finalizer outside it sees the outer scope.
 

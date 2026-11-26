@@ -457,12 +457,19 @@ function Effect.scopedWith(f)
 end
 
 --- Adds `f(exit)` to the current scope as a finalizer. `f` returns an effect
---- or nil.
+--- or nil. The finalizer runs in the context where it was added (v4's release
+--- context, specifications/26-services.md §26.5): those services win over the
+--- closing fiber's, and `Effect.scope` inside it is the scope it belongs to.
 ---@param f leffect.Scope.Finalizer
 ---@return leffect.Effect
 function Effect.addFinalizer(f)
   return core.flatMap(Effect.scope, function(scope)
-    return Scope.addFinalizerExit(scope, f)
+    return core.withFiber(function(fiber)
+      local captured = fiber.context
+      return Scope.addFinalizerExit(scope, function(exit)
+        return Effect.provideContext(f(exit) or core.exitVoid, captured)
+      end)
+    end)
   end)
 end
 
@@ -470,27 +477,31 @@ end
 
 --- Acquires a resource with `acquire`, uninterruptibly, and adds
 --- `release(resource, exit)` to the current scope, before any interrupt can
---- be delivered. The release runs when the scope closes, with the close exit.
---- If acquire fails, nothing is released. With `options.interruptible`,
---- acquire may be interrupted, and then there is nothing to release. Without
---- a current scope, it dies before acquiring anything.
+--- be delivered. The release runs when the scope closes, with the close exit,
+--- in the context `acquireRelease` started in (§26.5). If acquire fails,
+--- nothing is released. With `options.interruptible`, acquire may be
+--- interrupted, and then there is nothing to release. Without a current
+--- scope, it dies before acquiring anything.
 ---@param acquire leffect.Effect
 ---@param release fun(resource: any, exit: leffect.Exit): leffect.Effect?
 ---@param options { interruptible: boolean? }?
 ---@return leffect.Effect
 function Effect.acquireRelease(acquire, release, options)
-  return runtime.uninterruptibleMask(function(restore)
-    return core.flatMap(Effect.scope, function(scope)
-      local run = acquire
-      if options and options.interruptible then
-        run = restore(acquire)
-      end
-      return core.flatMap(run, function(resource)
-        local added = Scope.addFinalizerExit(scope, function(exit)
-          return release(resource, exit)
-        end)
-        return core.map(added, function()
-          return resource
+  return core.withFiber(function(fiber)
+    local captured = fiber.context
+    return runtime.uninterruptibleMask(function(restore)
+      return core.flatMap(Effect.scope, function(scope)
+        local run = acquire
+        if options and options.interruptible then
+          run = restore(acquire)
+        end
+        return core.flatMap(run, function(resource)
+          local added = Scope.addFinalizerExit(scope, function(exit)
+            return Effect.provideContext(release(resource, exit) or core.exitVoid, captured)
+          end)
+          return core.map(added, function()
+            return resource
+          end)
         end)
       end)
     end)

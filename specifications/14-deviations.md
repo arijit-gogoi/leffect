@@ -17,8 +17,6 @@ Part I (the runtime, M1) of the [Leffect specifications](README.md).
 | Unfinished `runSync` | Returns `Die(AsyncFiberError)` and leaves the fiber running | Interrupts the fiber and flushes again first, then returns the same Die | A private sync scheduler never runs again, so the fiber's finalizers would never run. |
 | `gen` (M2) | `yield*` inside a generator | `run(eff)` inside a coroutine; helpers call `Leffect.run` | Lua has no generators (§9). |
 | `catchAll` name (M2) | Renamed `catch` | Keeps M0's `catchAll` | CLAUDE.md's M0 API. |
-| Context (M2) | A `Context` of services, with service keys and Layers | A string-keyed table that holds only the Scope until M3 | M3 owns Context, keys and Layer (§18). The M3 design removes this row (§26). |
-| Release context (M2) | `release` runs with the context captured at acquire | It runs with the closing fiber's context | The context holds only the Scope in M2. The M3 design follows v4 and removes this row (§26.5). |
 | Finalizer callbacks (M2) | `release` and `addFinalizer`'s function return an Effect | They may also return nil | Matches `onExit` (§7.5). |
 | `forkIn` options (M2) | `startImmediately`, `uninterruptible` | None | Forks start on the next tick (first row); M1's `fork` takes no options either. |
 | Indexes (M2) | `f(a, i)` with `i` from 0 | `i` from 1 | Lua convention. |
@@ -73,9 +71,6 @@ Everything else follows 4.1.5:
 - **Coroutine cleanup (M2):** whether to `coroutine.close` abandoned gen
   coroutines on 5.4. It isn't needed for correctness (no `<close>` variables in
   the common subset). Leave it out unless memory profiling says otherwise.
-- **Release context (M3):** run `release` with the context captured at
-  acquire, as v4 does, once the context holds more than the Scope. The M3
-  design does this (§26.5).
 - **A Result type:** it would give `all` its `mode: "result"`, plus
   `Effect.result`.
 - **An Option type:** `timeoutOption`, `Effect.serviceOption`,
