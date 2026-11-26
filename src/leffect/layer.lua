@@ -24,6 +24,7 @@
 
 local Cause = require("leffect.cause")
 local Context = require("leffect.context")
+local Deferred = require("leffect.deferred")
 local Effect = require("leffect.effect")
 local Scope = require("leffect.scope")
 local core = require("leffect.core")
@@ -31,7 +32,6 @@ local runtime = require("leffect.runtime")
 
 local error, getmetatable, pairs, select, setmetatable, type =
   error, getmetatable, pairs, select, setmetatable, type
-local remove = table.remove
 
 local exitSucceed, exitFailCause, exitVoid = core.exitSucceed, core.exitFailCause, core.exitVoid
 local OP_FAILURE = core.OP_FAILURE
@@ -61,14 +61,9 @@ local describe = runtime.describe
 
 ---@class leffect.Layer.MemoEntry
 ---@field observers integer How many scopes use this build.
----@field deferred leffect.Layer.Deferred The build's exit, once there is one.
+---@field deferred leffect.Deferred The build's exit, once there is one (§35.1).
 ---@field scope leffect.Scope Owns the build's resources.
 ---@field finalizer leffect.Scope.Finalizer
-
----Internal: an exit that fibers can wait for, completed once.
----@class leffect.Layer.Deferred
----@field exit leffect.Exit?
----@field waiters (fun(exit: leffect.Exit))[]
 
 local methods = {}
 
@@ -142,53 +137,6 @@ local function fromBuildUnsafe(build)
   return setmetatable({ build = build }, LayerMT)
 end
 
--- The Deferred (§27.4) -------------------------------------------------------
-
----@return leffect.Layer.Deferred
-local function newDeferred()
-  return { exit = nil, waiters = {} }
-end
-
---- Completes `deferred` with `exit`, once, and wakes its waiters.
----@param deferred leffect.Layer.Deferred
----@param exit leffect.Exit
-local function deferredDone(deferred, exit)
-  if deferred.exit then
-    return
-  end
-  deferred.exit = exit
-  local waiters = deferred.waiters
-  deferred.waiters = {}
-  for i = 1, #waiters do
-    waiters[i](exit)
-  end
-end
-
---- Waits for `deferred`, then continues with its exit. An interrupted waiter
---- removes itself.
----@param deferred leffect.Layer.Deferred
----@return leffect.Effect
-local function deferredAwait(deferred)
-  return core.async(function(resume)
-    local exit = deferred.exit
-    if exit then
-      resume(exit)
-      return nil
-    end
-    local waiters = deferred.waiters
-    waiters[#waiters + 1] = resume
-    return function()
-      local list = deferred.waiters
-      for i = 1, #list do
-        if list[i] == resume then
-          remove(list, i)
-          return
-        end
-      end
-    end
-  end)
-end
-
 -- The MemoMap (§27.4, 4.1.5's `MemoMapImpl`) ---------------------------------
 
 ---@param parent leffect.Layer.MemoMap?
@@ -216,7 +164,7 @@ local function makeEntry(memoMap, layer)
   local entry
   entry = {
     observers = 0,
-    deferred = newDeferred(),
+    deferred = Deferred.makeUnsafe(),
     scope = Scope.makeUnsafe(),
     finalizer = function(exit)
       return core.suspend(function()
@@ -259,7 +207,7 @@ local function lookup(memoMap, layer, scope)
     local entry = map.entries[layer]
     if entry then
       observe(entry, scope)
-      return entry.deferred.exit or deferredAwait(entry.deferred)
+      return Deferred.await(entry.deferred)
     end
     map = map.parent
   end
@@ -295,7 +243,7 @@ local function getOrElseMemoize(memoMap, layer, scope, build)
       end),
       function(exit)
         if deferred then
-          deferredDone(deferred, exit)
+          Deferred.doneUnsafe(deferred, exit)
         end
         return nil
       end

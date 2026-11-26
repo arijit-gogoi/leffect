@@ -22,10 +22,12 @@
 return {
   Cause = require("leffect.cause"),
   Context = require("leffect.context"),
+  Deferred = require("leffect.deferred"),
   Effect = require("leffect.effect"),
   Exit = require("leffect.exit"),
   Fiber = require("leffect.fiber"),
   Layer = require("leffect.layer"),
+  Ref = require("leffect.ref"),
   Scope = require("leffect.scope"),
   --- Runs an effect from an `Effect.gen` body; the same function the body
   --- gets as its argument.
