@@ -1111,32 +1111,79 @@ function SyncScheduler:flush()
   end
 end
 
---- A root fiber running `effect` on `scheduler`, started on the next tick.
+--- A root fiber running `effect` on `scheduler`, started on the next tick,
+--- with `context`.
 ---@param effect any
 ---@param scheduler leffect.Scheduler
+---@param context leffect.Context
+---@param interruptible boolean
 ---@return leffect.Fiber
-local function startRoot(effect, scheduler)
-  local fiber = Fiber.new(scheduler, true)
+local function startRoot(effect, scheduler, context, interruptible)
+  local fiber = Fiber.new(scheduler, interruptible)
+  fiber.context = context
   scheduler:schedule(function()
     fiber:evaluate(effect)
   end)
   return fiber
 end
 
----@class leffect.RunForkOptions
----@field scheduler leffect.Scheduler
+---The options of `runFork` and `runCallback` (specifications/28-running.md
+---§28.1).
+---@class leffect.RunOptions
+---@field scheduler leffect.Scheduler Required.
+---@field uninterruptible boolean? Start the root fiber uninterruptible.
+---@field onFiberStart (fun(fiber: leffect.Fiber))? Called with the fiber before the runner returns.
+
+---@class leffect.RunCallbackOptions : leffect.RunOptions
+---@field onExit (fun(exit: leffect.Exit))? Called once with the fiber's exit.
+
+--- `runFork` with root context `context`; `name` is the runner, for the
+--- error.
+---@param effect leffect.Effect
+---@param options leffect.RunOptions
+---@param context leffect.Context
+---@param name string
+---@return leffect.Fiber
+local function fork(effect, options, context, name)
+  local scheduler = options and options.scheduler
+  if not scheduler then
+    error(name .. ": options.scheduler is required", 3)
+  end
+  local fiber = startRoot(effect, scheduler, context, not options.uninterruptible)
+  local onFiberStart = options.onFiberStart
+  if onFiberStart then
+    onFiberStart(fiber)
+  end
+  return fiber
+end
 
 --- Starts `effect` on a new root fiber on `options.scheduler`, on the next
 --- tick, and returns the fiber.
 ---@param effect leffect.Effect
----@param options leffect.RunForkOptions
+---@param options leffect.RunOptions
 ---@return leffect.Fiber
 function Effect.runFork(effect, options)
-  local scheduler = options and options.scheduler
-  if not scheduler then
-    error("Effect.runFork: options.scheduler is required", 2)
+  return fork(effect, options, Context.empty(), "Effect.runFork")
+end
+
+--- `runFork`, then `options.onExit(exit)` once the fiber ends (v4's
+--- `runCallback`). Returns a function that interrupts the fiber, on behalf of
+--- the fiber ID it is given, if any, without waiting. Called before the fiber
+--- starts, it stops the fiber before any of `effect` runs; called after the
+--- fiber ended, it does nothing. `onExit` must not throw: its error would
+--- reach the host.
+---@param effect leffect.Effect
+---@param options leffect.RunCallbackOptions
+---@return fun(fiberId: integer?) interrupt
+function Effect.runCallback(effect, options)
+  local fiber = fork(effect, options, Context.empty(), "Effect.runCallback")
+  local onExit = options.onExit
+  if onExit then
+    fiber:addObserver(onExit)
   end
-  return startRoot(effect, scheduler)
+  return function(fiberId)
+    fiber:interruptUnsafe(fiberId)
+  end
 end
 
 --- Runs `effect` synchronously on a fiber of its own and returns its Exit.
@@ -1150,7 +1197,7 @@ function Effect.runSyncExit(effect)
     return effect --[[@as leffect.Exit]]
   end
   local scheduler = newSyncScheduler()
-  local fiber = startRoot(effect, scheduler)
+  local fiber = startRoot(effect, scheduler, Context.empty(), true)
   scheduler:flush()
   local exit = fiber.exit
   if exit then
