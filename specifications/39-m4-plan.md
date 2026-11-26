@@ -204,7 +204,8 @@ Below the cut line:
 - **Closing a subscription's scope:**
   - lets a waiting publisher in, since the hub stops holding messages for the
     subscription;
-  - ends its waiting takes with an interrupt from the closing fiber;
+  - gives a taker that was already woken the messages it was woken for;
+  - ends its other waiting takes with an interrupt from the closing fiber;
   - makes later takes interrupt.
 - Two fibers taking from one subscription share its messages, each message to
   one of them.
@@ -216,7 +217,9 @@ Below the cut line:
   - `takeUpTo` doesn't return `final`;
   - a second `finish` succeeds with false.
 - **`shutdown`:**
-  - waiting takes and waiting publishes end with an interrupt;
+  - it ends the subscriptions first, which frees room, so waiting publishes
+    get in and succeed with true, as in v4;
+  - a waiting take that gets no message ends with an interrupt;
   - later publishes succeed with false, and later takes interrupt;
   - `awaitShutdown` continues, and `isShutdown` is true;
   - `size` is 0;

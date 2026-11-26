@@ -73,8 +73,10 @@ end))
     PubSub.ts 1396).
   - That is safe in v4 only because its resume runs inline (§14).
 - **When the subscription's scope closes,** the subscription ends:
-  - its waiting takers end with an interrupt from the fiber that closes the
-    scope;
+  - a taker that was already woken gets the messages its wake pass counted
+    for it, in line order. In v4 they would already be in its Deferred;
+  - its other waiting takers end with an interrupt from the fiber that closes
+    the scope;
   - a later take interrupts the fiber that makes it (`Effect.interrupt`), and
     so does `remaining`;
   - it stops holding messages, which can let waiting publishers in.
@@ -87,7 +89,7 @@ end))
 | Function | Semantics |
 |---|---|
 | `PubSub.finish(hub, message)`, `finishUnsafe(hub, message)` | v4's `end`. Publishes a final message. Succeeds with true, or with false if the hub had already finished or shut down. |
-| `PubSub.shutdown(hub)` | Shuts the hub down, uninterruptibly. It ends every subscription, interrupts the waiting publishers, and opens the shutdown latch. |
+| `PubSub.shutdown(hub)` | Shuts the hub down, uninterruptibly. It ends every subscription, then interrupts the publishers still waiting, and opens the shutdown latch. Ending the subscriptions frees room, so a waiting publish can get in and succeed with true first, as in v4 (PubSub.ts 822). |
 | `PubSub.isShutdown(hub)`, `isShutdownUnsafe(hub)` | Whether the hub has shut down. |
 | `PubSub.awaitShutdown(hub)` | Waits until the hub shuts down. |
 

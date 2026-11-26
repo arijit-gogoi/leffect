@@ -79,6 +79,13 @@ local EXIT_TRUE, EXIT_FALSE = exitSucceed(true), exitSucceed(false)
 ---@field takeBetween fun(self: leffect.PubSub.Subscription, min: number, max: number): leffect.Effect
 ---@field remaining fun(self: leffect.PubSub.Subscription): leffect.Effect
 
+---A fiber waiting to take from a subscription.
+---@class leffect.PubSub.Taker
+---@field max number How many messages it takes at most.
+---@field resume fun(effect: leffect.Effect)? Nil once it is woken.
+---@field deliver fun(list: table): leffect.Effect? Its result, from messages handed to it.
+---@field handed leffect.Effect? Its result, set when its subscription closes after it was woken.
+
 ---A waiting publish: what is left of its list.
 ---@class leffect.PubSub.Publisher
 ---@field list table
@@ -362,6 +369,18 @@ local function pollUpTo(sub, n)
   return list
 end
 
+--- Appends `more` to `list`; both have `n`.
+---@param list table
+---@param more table
+local function appendList(list, more)
+  local k = list.n
+  for i = 1, more.n do
+    k = k + 1
+    list[k] = more[i]
+  end
+  list.n = k
+end
+
 --- The subscription stops holding messages.
 ---@param sub leffect.PubSub.Subscription
 local function unsubscribeUnsafe(sub)
@@ -426,12 +445,10 @@ local function wakeSubscribers(hub)
 end
 
 --- Accepts waiting publishes, in order, while the hub has room (v4's
---- `onPubSubEmptySpaceUnsafe`).
+--- `onPubSubEmptySpaceUnsafe`). It runs during `shutdown` too: closing the
+--- subscriptions frees room, so the waiting publishes get in.
 ---@param hub leffect.PubSub
 local function acceptPublishers(hub)
-  if hub.down then
-    return -- shutdown interrupts the waiting publishers instead
-  end
   local publishers = hub.publishers
   local accepted = false
   while publishers.size > 0 and not isFullUnsafe(hub) do
@@ -599,17 +616,15 @@ local function handleSurplus(hub, surplus)
     if hub.ended then
       resume(EXIT_FALSE)
       return nil
+    elseif hub.down then
+      resume(Effect.interrupt)
+      return nil
     end
     ---@type leffect.PubSub.Publisher
     local entry = { list = surplus, offset = 0, total = surplus.n, resume = resume }
     local publishers = hub.publishers
     Waitlist.push(publishers, entry)
     acceptPublishers(hub)
-    if hub.down then
-      Waitlist.remove(publishers, entry)
-      resume(Effect.interrupt)
-      return nil
-    end
     -- An interrupted publish withdraws the messages not accepted yet.
     return function()
       Waitlist.remove(publishers, entry)
@@ -733,9 +748,12 @@ end
 
 -- Subscribing ---------------------------------------------------------------
 
---- Ends a subscription, on behalf of the fiber closing its scope: its
---- waiting takers end with an interrupt from that fiber, and it stops
---- holding messages, which can let waiting publishers in.
+--- Ends a subscription, on behalf of the fiber closing its scope, and stops
+--- holding its messages, which can let waiting publishers in.
+---
+--- A taker already woken gets, in line order, the messages its wake pass
+--- counted for it: in v4 they would already be in its Deferred. The other
+--- waiting takers end with an interrupt from the closing fiber.
 ---@param sub leffect.PubSub.Subscription
 ---@return leffect.Effect
 local function unsubscribe(sub)
@@ -747,7 +765,15 @@ local function unsubscribe(sub)
     local interrupted = exitFailCause(Cause.interrupt(fiber.id))
     local nodes = Waitlist.clear(sub.takers)
     for i = 1, #nodes do
-      wakeNode(nodes[i], interrupted)
+      local node = nodes[i] --[[@as leffect.PubSub.Taker]]
+      if node.resume then
+        wakeNode(node, interrupted)
+      else
+        local list = { n = 0 }
+        takeReplayedInto(sub, list, node.max)
+        appendList(list, pollUpTo(sub, node.max - list.n))
+        node.handed = node.deliver(list) or interrupted
+      end
     end
     local hub = sub.hub
     Waitlist.remove(hub.subscriptions, sub)
@@ -797,11 +823,15 @@ end
 --- A new take doesn't overtake a fiber already waiting on the subscription.
 --- A waiter keeps its place until it takes, and an exit frame passes its
 --- turn on if it leaves first (§33.2).
+---
+--- `deliver` turns the messages handed to a woken taker, when its
+--- subscription closes, into its result (see `unsubscribe`).
 ---@param sub leffect.PubSub.Subscription
 ---@param atMost number
 ---@param attempt fun(): leffect.Effect?
+---@param deliver fun(list: table): leffect.Effect?
 ---@return leffect.Effect
-local function takeOrWait(sub, atMost, attempt)
+local function takeOrWait(sub, atMost, attempt, deliver)
   return core.withFiber(function(fiber)
     local takers = sub.takers
     if takers.size == 0 then
@@ -810,7 +840,8 @@ local function takeOrWait(sub, atMost, attempt)
         return result
       end
     end
-    local node = { max = atMost }
+    ---@type leffect.PubSub.Taker
+    local node = { max = atMost, deliver = deliver }
     Waitlist.push(takers, node)
     runtime.onExitUnsafe(fiber, function()
       if Waitlist.remove(takers, node) then
@@ -829,7 +860,7 @@ local function takeOrWait(sub, atMost, attempt)
     end)
     local loop
     loop = core.flatMap(wait, function()
-      local result = attempt()
+      local result = node.handed or attempt()
       if result then
         Waitlist.remove(takers, node)
         return result
@@ -862,19 +893,27 @@ function PubSub.take(sub)
       return exitSucceed(sub.hub.final)
     end
     return nil
+  end, function(list)
+    if list.n > 0 then
+      return exitSucceed(list[1])
+    elseif sub.hub.ended then
+      return exitSucceed(sub.hub.final)
+    end
+    return nil
   end)
 end
 
---- Appends `more` to `list`; both have `n`.
----@param list table
----@param more table
-local function appendList(list, more)
-  local k = list.n
-  for i = 1, more.n do
-    k = k + 1
-    list[k] = more[i]
+---@param sub leffect.PubSub.Subscription
+---@return fun(list: table): leffect.Effect?
+local function deliverAll(sub)
+  return function(list)
+    if list.n > 0 then
+      return exitSucceed(list)
+    elseif sub.hub.ended then
+      return exitSucceed({ sub.hub.final, n = 1 })
+    end
+    return nil
   end
-  list.n = k
 end
 
 --- Takes every message waiting for this subscription, replayed ones first,
@@ -883,6 +922,7 @@ end
 ---@return leffect.Effect
 function PubSub.takeAll(sub)
   checkSubscription(sub, "PubSub.takeAll")
+  local deliver = deliverAll(sub)
   return takeOrWait(sub, huge, function()
     if sub.closed then
       return Effect.interrupt
@@ -892,13 +932,8 @@ function PubSub.takeAll(sub)
     local list = { n = 0 }
     takeReplayedInto(sub, list, huge)
     appendList(list, live)
-    if list.n > 0 then
-      return exitSucceed(list)
-    elseif sub.hub.ended then
-      return exitSucceed({ sub.hub.final, n = 1 })
-    end
-    return nil
-  end)
+    return deliver(list)
+  end, deliver)
 end
 
 --- Takes up to `max` messages, replayed ones first, without waiting. Never
@@ -1006,8 +1041,9 @@ function PubSub.finish(hub, message)
 end
 
 --- Shuts the hub down, uninterruptibly: ends every subscription, interrupts
---- the waiting publishers, and opens the shutdown latch. A second call does
---- nothing.
+--- the publishers still waiting, and opens the shutdown latch. Ending the
+--- subscriptions frees room first, so a waiting publish can succeed with
+--- true, as in v4. A second call does nothing.
 ---@param hub leffect.PubSub
 ---@return leffect.Effect
 function PubSub.shutdown(hub)

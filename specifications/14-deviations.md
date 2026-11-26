@@ -47,7 +47,6 @@ Part I (the runtime, M1) of the [Leffect specifications](README.md).
 | Data-last forms (M4) | `semaphore.withPermits(n)(effect)` | `sem:withPermits(n, effect)` | Leffect has no `pipe`, and its functions take the effect directly (§33.5). |
 | Queue views (M4) | `asEnqueue`, `asDequeue`, `isEnqueue`, `isDequeue`, `flush`, `flushUnsafe` | Not provided | The first four concern TypeScript types. `flush` forces a deferred wake task, which Leffect doesn't have (§37.5). |
 | Counts (M4) | Semaphore permits and Queue capacities aren't checked | They must be non-negative integers, or the call raises | Lua has no static types (§33.5). |
-| PubSub `shutdown` (M4) | Closing the subscriptions frees room, so a waiting publish can be accepted before the strategy interrupts the publishers | Once `shutdown` starts, no waiting publish is accepted. Each one ends with the interrupt | §38.3 says `shutdown` interrupts the waiting publishers, and a publish after it succeeds with false. |
 | Type guards (M4) | Only `Deferred.isDeferred`, `Queue.isQueue` and `PubSub.isPubSub` | Also `Ref.isRef`, `SynchronizedRef.isSynchronizedRef`, `Latch.isLatch`, `Semaphore.isSemaphore` and `PubSub.isSubscription` | Lua has no static types, so each primitive gets a type check, as Context's keys do (§26.1). |
 
 Everything else follows 4.1.5:
