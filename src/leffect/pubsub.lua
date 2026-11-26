@@ -37,6 +37,8 @@ local EXIT_TRUE, EXIT_FALSE = exitSucceed(true), exitSucceed(false)
 ---@field policy "suspend"|"dropping"|"sliding"
 ---@field values table Held messages, by publish index.
 ---@field counts table<integer, integer> Subscribers still to take each held message.
+---@field replayIndices table<integer, integer> Each held message's replay index.
+---@field replay leffect.PubSub.Replay? The last messages, for new subscriptions.
 ---@field publisherIndex integer The index of the next message.
 ---@field subscribersIndex integer The index of the oldest held message.
 ---@field subscriberCount integer
@@ -70,6 +72,7 @@ local EXIT_TRUE, EXIT_FALSE = exitSucceed(true), exitSucceed(false)
 ---@field unsubscribed boolean It no longer holds messages.
 ---@field closed boolean Its scope closed: takes interrupt.
 ---@field takers leffect.Waitlist
+---@field window leffect.PubSub.Window? What is left of the replay.
 ---@field take fun(self: leffect.PubSub.Subscription): leffect.Effect
 ---@field takeAll fun(self: leffect.PubSub.Subscription): leffect.Effect
 ---@field takeUpTo fun(self: leffect.PubSub.Subscription, max: number): leffect.Effect
@@ -125,6 +128,132 @@ local function normalize(n)
   return floor(n)
 end
 
+-- Replay (§38.4, v4's `ReplayBuffer` and `ReplayWindowImpl`) ----------------
+
+---The last messages published, for new subscriptions.
+---@class leffect.PubSub.Replay
+---@field size integer How many messages it remembers.
+---@field ring table<integer, any> The messages, by replay index.
+---@field count integer
+---@field nextIndex integer The replay index of the next message.
+---@field slides table<integer, { value: any, index: integer }> Live messages a sliding hub dropped.
+---@field slideCount integer
+
+---A subscription's copy of the replay, read before live messages.
+---@class leffect.PubSub.Window
+---@field values table<integer, any> A ring of `length` slots.
+---@field length integer
+---@field pos integer The slot of the oldest message left.
+---@field remaining integer
+---@field slideIndex integer The slides already seen.
+---@field newest integer The replay index of the newest message in the window.
+
+--- Remembers `message`, and returns its replay index.
+---@param replay leffect.PubSub.Replay
+---@param message any
+---@return integer
+local function remember(replay, message)
+  local index = replay.nextIndex
+  replay.nextIndex = index + 1
+  replay.ring[index] = message
+  if replay.count == replay.size then
+    replay.ring[index - replay.size] = nil
+  else
+    replay.count = replay.count + 1
+  end
+  return index
+end
+
+--- A window on what `replay` remembers now.
+---@param replay leffect.PubSub.Replay
+---@return leffect.PubSub.Window?
+local function openWindow(replay)
+  local count = replay.count
+  if count == 0 then
+    return nil
+  end
+  local values, first = {}, replay.nextIndex - count
+  for i = 0, count - 1 do
+    values[i] = replay.ring[first + i]
+  end
+  return {
+    values = values,
+    length = count,
+    pos = 0,
+    remaining = count,
+    slideIndex = replay.slideCount,
+    newest = replay.nextIndex - 1,
+  }
+end
+
+--- Live messages that a sliding hub dropped before the subscription saw them
+--- join the end of its window, and push its oldest replayed messages out.
+---@param window leffect.PubSub.Window
+---@param replay leffect.PubSub.Replay
+local function syncWindow(window, replay)
+  local slides = replay.slideCount - window.slideIndex
+  if slides == 0 or window.remaining == 0 then
+    return
+  end
+  local count = min(slides, replay.size)
+  local start = replay.slideCount - count
+  local length = window.length
+  for i = 0, count - 1 do
+    local entry = replay.slides[start + i]
+    if entry.index > window.newest then
+      window.pos = (window.pos + 1) % length
+      window.values[(window.pos + window.remaining - 1) % length] = entry.value
+      window.newest = entry.index
+    end
+  end
+  window.slideIndex = replay.slideCount
+end
+
+--- Takes the window's oldest message. Returns false if it is empty.
+---@param sub leffect.PubSub.Subscription
+---@return boolean
+---@return any
+local function takeReplayed(sub)
+  local window = sub.window
+  if not window or window.remaining == 0 then
+    return false
+  end
+  syncWindow(window, sub.hub.replay --[[@as leffect.PubSub.Replay]])
+  local pos = window.pos
+  local message = window.values[pos]
+  window.values[pos] = nil
+  window.pos = (pos + 1) % window.length
+  window.remaining = window.remaining - 1
+  if window.remaining == 0 then
+    sub.window = nil
+  end
+  return true, message
+end
+
+---@param sub leffect.PubSub.Subscription
+---@return integer
+local function replayedFor(sub)
+  local window = sub.window
+  return window and window.remaining or 0
+end
+
+--- Takes up to `n` replayed messages into `list`, which has `n`.
+---@param sub leffect.PubSub.Subscription
+---@param list table
+---@param n number
+local function takeReplayedInto(sub, list, n)
+  local k = list.n
+  while k < n do
+    local ok, message = takeReplayed(sub)
+    if not ok then
+      break
+    end
+    k = k + 1
+    list[k] = message
+  end
+  list.n = k
+end
+
 -- The buffer (§38.5) ---------------------------------------------------------
 
 ---@param hub leffect.PubSub
@@ -139,7 +268,7 @@ end
 local function release(hub, index)
   local left = hub.counts[index] - 1
   if left == 0 then
-    hub.values[index], hub.counts[index] = nil, nil
+    hub.values[index], hub.counts[index], hub.replayIndices[index] = nil, nil, nil
     hub.subscribersIndex = hub.subscribersIndex + 1
   else
     hub.counts[index] = left
@@ -147,7 +276,7 @@ local function release(hub, index)
 end
 
 --- Publishes one message if the hub isn't full. With no subscribers, the
---- message is accepted but not held.
+--- message is accepted but not held. A replay remembers it either way.
 ---@param hub leffect.PubSub
 ---@param message any
 ---@return boolean
@@ -155,20 +284,31 @@ local function offer(hub, message)
   if isFullUnsafe(hub) then
     return false
   end
+  local replay = hub.replay
+  local replayIndex = replay and remember(replay, message)
   if hub.subscriberCount ~= 0 then
     local index = hub.publisherIndex
     hub.values[index], hub.counts[index] = message, hub.subscriberCount
+    hub.replayIndices[index] = replayIndex
     hub.publisherIndex = index + 1
   end
   return true
 end
 
 --- Drops the oldest held message, for every subscriber that hasn't taken it.
+--- A replay records it, for the windows still being read.
 ---@param hub leffect.PubSub
 local function slide(hub)
   local index = hub.subscribersIndex
   if index ~= hub.publisherIndex then
-    hub.values[index], hub.counts[index] = nil, nil
+    local replay = hub.replay
+    if replay then
+      local n = replay.slideCount
+      replay.slides[n] = { value = hub.values[index], index = hub.replayIndices[index] }
+      replay.slides[n - replay.size] = nil
+      replay.slideCount = n + 1
+    end
+    hub.values[index], hub.counts[index], hub.replayIndices[index] = nil, nil, nil
     hub.subscribersIndex = index + 1
   end
 end
@@ -267,7 +407,7 @@ local function wakeTakers(sub)
     end
     return
   end
-  local left = heldFor(sub)
+  local left = heldFor(sub) + replayedFor(sub)
   while node and left > 0 do
     left = left - min(node.max, left)
     wakeNode(node, exitVoid)
@@ -311,9 +451,26 @@ end
 
 -- Making --------------------------------------------------------------------
 
----@param capacity any
+---@alias leffect.PubSub.Options { capacity: integer?, replay: integer? }
+
+--- The capacity and the replay size from `options`, a capacity or a table.
+---@param options any
 ---@param name string
-local function checkCapacity(capacity, name)
+---@param bounded boolean Whether a capacity is required.
+---@return number capacity
+---@return integer replay
+local function parse(options, name, bounded)
+  local capacity, replay = huge, 0
+  if type(options) == "table" then
+    capacity, replay = options.capacity, options.replay or 0
+    if not bounded then
+      capacity = huge
+    end
+  elseif bounded then
+    capacity = options
+  elseif options ~= nil then
+    error(name .. ": expected an options table, got " .. describe(options), 3)
+  end
   if
     type(capacity) ~= "number"
     or capacity <= 0
@@ -324,17 +481,23 @@ local function checkCapacity(capacity, name)
       3
     )
   end
+  if type(replay) ~= "number" or replay < 0 or replay == huge or floor(replay) ~= replay then
+    error(name .. ": replay must be a non-negative integer, got " .. describe(replay), 3)
+  end
+  return capacity, replay
 end
 
 ---@param capacity number
 ---@param policy "suspend"|"dropping"|"sliding"
+---@param replay integer
 ---@return leffect.PubSub
-local function new(capacity, policy)
+local function new(capacity, policy, replay)
   return setmetatable({
     maxSize = capacity,
     policy = policy,
     values = {},
     counts = {},
+    replayIndices = {},
     publisherIndex = 0,
     subscribersIndex = 0,
     subscriberCount = 0,
@@ -345,47 +508,58 @@ local function new(capacity, policy)
     down = false,
     ended = false,
     final = nil,
+    replay = replay > 0 and {
+      size = replay,
+      ring = {},
+      count = 0,
+      nextIndex = 0,
+      slides = {},
+      slideCount = 0,
+    } or nil,
   }, PubSubMT)
 end
 
 ---@param capacity number
 ---@param policy "suspend"|"dropping"|"sliding"
+---@param replay integer
 ---@return leffect.Effect
-local function make(capacity, policy)
+local function make(capacity, policy, replay)
   return core.sync(function()
-    return new(capacity, policy)
+    return new(capacity, policy, replay)
   end)
 end
 
 --- A hub that holds up to `capacity` messages. A publish to a full hub
---- waits.
----@param capacity integer
+--- waits. Takes a capacity, or `{ capacity = n, replay = k }`.
+---@param options integer|leffect.PubSub.Options
 ---@return leffect.Effect
-function PubSub.bounded(capacity)
-  checkCapacity(capacity, "PubSub.bounded")
-  return make(capacity, "suspend")
+function PubSub.bounded(options)
+  local capacity, replay = parse(options, "PubSub.bounded", true)
+  return make(capacity, "suspend", replay)
 end
 
 --- A hub whose publishes to a full hub are dropped, and succeed with false.
----@param capacity integer
+---@param options integer|leffect.PubSub.Options
 ---@return leffect.Effect
-function PubSub.dropping(capacity)
-  checkCapacity(capacity, "PubSub.dropping")
-  return make(capacity, "dropping")
+function PubSub.dropping(options)
+  local capacity, replay = parse(options, "PubSub.dropping", true)
+  return make(capacity, "dropping", replay)
 end
 
 --- A hub whose publishes to a full hub drop the oldest held message.
----@param capacity integer
+---@param options integer|leffect.PubSub.Options
 ---@return leffect.Effect
-function PubSub.sliding(capacity)
-  checkCapacity(capacity, "PubSub.sliding")
-  return make(capacity, "sliding")
+function PubSub.sliding(options)
+  local capacity, replay = parse(options, "PubSub.sliding", true)
+  return make(capacity, "sliding", replay)
 end
 
---- A hub that is never full.
+--- A hub that is never full. Takes `{ replay = k }`.
+---@param options { replay: integer? }?
 ---@return leffect.Effect
-function PubSub.unbounded()
-  return make(huge, "suspend")
+function PubSub.unbounded(options)
+  local capacity, replay = parse(options, "PubSub.unbounded", false)
+  return make(capacity, "suspend", replay)
 end
 
 ---@param value any
@@ -492,12 +666,10 @@ function PubSub.publishAll(hub, messages)
     end
     local total = messages.n or #messages
     local surplus, k = { n = 0 }, 0
-    if hub.subscriberCount ~= 0 then
-      for i = 1, total do
-        if k > 0 or not offer(hub, messages[i]) then
-          k = k + 1
-          surplus[k] = messages[i]
-        end
+    for i = 1, total do
+      if k > 0 or not offer(hub, messages[i]) then
+        k = k + 1
+        surplus[k] = messages[i]
       end
     end
     surplus.n = k
@@ -580,6 +752,7 @@ local function unsubscribe(sub)
     local hub = sub.hub
     Waitlist.remove(hub.subscriptions, sub)
     unsubscribeUnsafe(sub)
+    sub.window = nil
     acceptPublishers(hub)
     return exitVoid
   end)
@@ -602,6 +775,7 @@ function PubSub.subscribe(hub)
       unsubscribed = false,
       closed = false,
       takers = Waitlist.new(),
+      window = hub.replay and openWindow(hub.replay),
     }, SubscriptionMT)
     Waitlist.push(hub.subscriptions, sub)
     return core.flatMap(Scope.addFinalizer(scope, unsubscribe(sub)), function()
@@ -676,6 +850,10 @@ function PubSub.take(sub)
     if sub.closed then
       return Effect.interrupt
     end
+    local replayed, old = takeReplayed(sub)
+    if replayed then
+      return exitSucceed(old)
+    end
     local ok, message = poll(sub)
     if ok then
       acceptPublishers(sub.hub)
@@ -687,8 +865,20 @@ function PubSub.take(sub)
   end)
 end
 
---- Takes every message waiting for this subscription, and waits for at
---- least one.
+--- Appends `more` to `list`; both have `n`.
+---@param list table
+---@param more table
+local function appendList(list, more)
+  local k = list.n
+  for i = 1, more.n do
+    k = k + 1
+    list[k] = more[i]
+  end
+  list.n = k
+end
+
+--- Takes every message waiting for this subscription, replayed ones first,
+--- and waits for at least one.
 ---@param sub leffect.PubSub.Subscription
 ---@return leffect.Effect
 function PubSub.takeAll(sub)
@@ -697,9 +887,12 @@ function PubSub.takeAll(sub)
     if sub.closed then
       return Effect.interrupt
     end
-    local list = pollUpTo(sub, huge)
+    local live = pollUpTo(sub, huge)
+    acceptPublishers(sub.hub)
+    local list = { n = 0 }
+    takeReplayedInto(sub, list, huge)
+    appendList(list, live)
     if list.n > 0 then
-      acceptPublishers(sub.hub)
       return exitSucceed(list)
     elseif sub.hub.ended then
       return exitSucceed({ sub.hub.final, n = 1 })
@@ -708,8 +901,8 @@ function PubSub.takeAll(sub)
   end)
 end
 
---- Takes up to `max` messages, without waiting. Never returns the final
---- message.
+--- Takes up to `max` messages, replayed ones first, without waiting. Never
+--- returns the final message.
 ---@param sub leffect.PubSub.Subscription
 ---@param atMost number
 ---@return leffect.Effect
@@ -719,9 +912,11 @@ function PubSub.takeUpTo(sub, atMost)
     if sub.closed then
       return Effect.interrupt
     end
+    local limit = normalize(atMost)
     local list = { n = 0 }
+    takeReplayedInto(sub, list, limit)
     if sub.takers.size == 0 then
-      list = pollUpTo(sub, normalize(atMost))
+      appendList(list, pollUpTo(sub, limit - list.n))
     end
     acceptPublishers(sub.hub)
     return exitSucceed(list)
@@ -773,7 +968,7 @@ function PubSub.remaining(sub)
     if sub.closed then
       return Effect.interrupt
     end
-    return exitSucceed(heldFor(sub))
+    return exitSucceed(heldFor(sub) + replayedFor(sub))
   end)
 end
 
