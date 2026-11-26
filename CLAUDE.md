@@ -111,7 +111,7 @@ specifications/     -- the runtime design, one file per topic
     list. The user approved it on 2026-11-26.
   - Part IV (files `33`–`39`) covers M4: the shared rules for waiting and
     waking, Ref, Deferred, Latch, Semaphore, Queue, PubSub, and the M4 spec
-    list. It awaits the user's approval: don't build M4 before then.
+    list. The user approved it on 2026-11-26.
 
   Follow it. Propose changes to the specifications before deviating in code.
 - Effect v4's source, pinned to Effect 4.1.5: the `effect@4.1.5` tag of

@@ -295,7 +295,8 @@ Below the cut line, built last:
 ## 41. M4 decisions taken on the user's behalf (2026-11-26)
 
 The user asked for this design on 2026-11-26. These choices were made here,
-and await the user's approval with the design.
+and the user approved them with the design the same day: "M4 decisions
+approved".
 
 49. **M4's scope** (§33):
     - CLAUDE.md's five primitives;
