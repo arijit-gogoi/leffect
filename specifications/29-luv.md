@@ -125,8 +125,9 @@ function scheduler:run(effect)
   end
   local fiber = self:fork(effect)
   local remove = fiber:addObserver(function() uv.stop() end)
-  uv.run("default")
-  remove()
+  local ok, err = pcall(uv.run, "default")
+  remove() -- however the loop returned
+  if not ok then error(err, 0) end
   return fiber.exit, fiber
 end
 ```
@@ -141,8 +142,11 @@ end
 - `uv.run` isn't reentrant. Called from inside the loop, luv returns
   `nil, "loop already running"` (`src/loop.c` lines 32–46). `run` raises the
   clearer error above instead.
-- `run` removes its observer before it returns. A fiber that ends during a
-  later `uv.run` therefore doesn't stop someone else's loop.
+- `run` removes its observer before it returns, or raises if `uv.run`
+  raised. A fiber that ends during a later `uv.run` therefore doesn't stop
+  someone else's loop. `uv.stop()` is called only from inside the running
+  loop: libuv keeps the flag otherwise, and the next `uv.run` would return at
+  once.
 - In Neovim, Neovim runs the loop itself, and `uv.loop_mode()` can't see that.
   Use `fork` or `runCallback` there, never `run`.
 

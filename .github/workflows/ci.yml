@@ -31,10 +31,18 @@ jobs:
       - name: Install busted
         run: luarocks install busted
 
+      # luv is optional for Leffect, but the live luv specs need it
+      # (specifications/29-luv.md §29.7).
+      - name: Install luv
+        run: luarocks install luv
+
       - name: Build rock
         run: luarocks make
 
       - name: Test
+        env:
+          # Fail the live luv specs instead of skipping them if luv is missing.
+          LEFFECT_REQUIRE_LUV: "1"
         run: busted -o utfTerminal
 
   lint:

@@ -54,6 +54,7 @@ src/leffect/
   layer.lua         -- Layer: building services, shared through a MemoMap
   scope.lua         -- Scope
   scheduler/test.lua
+  scheduler/luv.lua -- luv adapter; luv is optional
 spec/               -- busted specs
 specifications/     -- the runtime design, one file per topic
 ```

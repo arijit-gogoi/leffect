@@ -54,5 +54,5 @@ Each of these becomes at least one spec.
     after the last scope that uses it closes (§27.4).
 21. **A failed layer build releases what it acquired** (M3) before the
     failure comes out (§27.1, §27.5).
-22. **The luv scheduler never runs a task in the batch that queued it** (M3
-    design), so I/O and timers get a turn between batches (§29.2).
+22. **The luv scheduler never runs a task in the batch that queued it**
+    (M3), so I/O and timers get a turn between batches (§29.2).
