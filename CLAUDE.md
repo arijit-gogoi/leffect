@@ -43,16 +43,22 @@ services/layers. Effect TS's behavior is the reference: when in doubt, match it.
 
 ```
 src/leffect/
-  init.lua          -- public entry: Cause, Context, Effect, Exit, Fiber, Layer, Scope, run
+  init.lua          -- public entry: Cause, Context, Deferred, Effect, Exit, Fiber,
+                    -- Latch, Layer, PubSub, Queue, Ref, Scope, Semaphore,
+                    -- SynchronizedRef, run
   core.lua          -- effect representation: shared metatable, op names, primitives
   effect.lua        -- public API: constructors, combinators, runners
   exit.lua
-  cause.lua
-  runtime.lua       -- fiber run loop, frames, gen
+  cause.lua         -- Cause, plus Cause.Done
+  runtime.lua       -- fiber run loop, frames, gen, onExitUnsafe
   fiber.lua
   context.lua       -- Context: services, Service and Reference keys
   layer.lua         -- Layer: building services, shared through a MemoMap
   scope.lua         -- Scope
+  waitlist.lua      -- internal: the ordered line of waiters
+  ref.lua, synchronizedref.lua
+  deferred.lua, latch.lua, semaphore.lua
+  queue.lua, pubsub.lua
   scheduler/test.lua
   scheduler/luv.lua -- luv adapter; luv is optional
 spec/               -- busted specs

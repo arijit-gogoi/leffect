@@ -56,19 +56,19 @@ Each of these becomes at least one spec.
     failure comes out (§27.1, §27.5).
 22. **The luv scheduler never runs a task in the batch that queued it**
     (M3), so I/O and timers get a turn between batches (§29.2).
-23. **`Unsafe` functions never run fiber code** (M4 design).
+23. **`Unsafe` functions never run fiber code** (M4).
     `Deferred.doneUnsafe`, `Latch.openUnsafe`, `Queue.offerUnsafe`,
     `PubSub.publishUnsafe` and the other `Unsafe` functions change state and
     schedule wakeups. So any callback may call them (§33.4).
 24. **A waiter keeps its place until it leaves, and a woken waiter that
-    leaves passes its turn on** (M4 design). Every wait that consumes permits
+    leaves passes its turn on** (M4). Every wait that consumes permits
     or messages has an exit frame. The frame removes the waiter and runs the
     wake pass (§33.2).
-25. **Permits are conserved** (M4 design). `withPermits` and `takeScoped`
+25. **Permits are conserved** (M4). `withPermits` and `takeScoped`
     give back exactly the permits they took, on every exit path. An
     interrupted wait takes none (§36).
-26. **A queue never loses or duplicates a message** (M4 design). Each
+26. **A queue never loses or duplicates a message** (M4). Each
     accepted message is taken once, unless sliding, `clear` or `shutdown`
     drops it (§37).
 27. **A subscription gets each message accepted while it is subscribed, once
-    and in order** (M4 design), unless a sliding hub drops the message (§38).
+    and in order** (M4), unless a sliding hub drops the message (§38).

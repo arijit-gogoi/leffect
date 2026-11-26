@@ -126,18 +126,19 @@ and `unbounded` accepts `{ replay = k }`:
 
 ### 38.5 Internals
 
-- **One buffer serves every strategy.** It is a linked list of message nodes.
-  - Each node counts the subscribers that still have to take it.
-  - A subscription holds its place in the list.
-  - The hub holds the nodes from the oldest one that is still counted; their
-    number is `size`.
+- **One buffer serves every strategy.** It is a table of messages, indexed
+  by publish number, as v4's bounded buffers are, without the modulo.
+  - Each held message counts the subscribers that still have to take it.
+  - A subscription holds the number of its next message.
+  - The hub holds the messages from the oldest one that is still counted;
+    their number is `size`.
 - **v4 has four buffers that behave the same:**
   - one for capacity 1;
   - one for powers of two, which indexes with `&`;
   - one for other capacities;
   - an unbounded list.
 
-  Lua's common subset has no bitwise operators, and one list is enough (§14).
+  Lua's common subset has no bitwise operators, and one table is enough (§14).
 - **Custom buffers and strategies stay internal.** v4's
   `make({ atomicPubSub, strategy })`, `makeAtomicBounded`,
   `makeAtomicUnbounded` and the strategy classes let users plug in their own

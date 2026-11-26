@@ -152,10 +152,10 @@ This follows v4's `MemoMapImpl` (Layer.ts 253–275 and 418–469).
   - So a `provide` inside an effect that got its services from another
     `provide` reuses the layers the outer one built. Sibling `provide` calls
     build their own copies. v4 documents this behavior for `Effect.provide`.
-- **The Deferred is internal.** It holds an exit and a list of waiters. It is
-  awaited with `async`, and completed once, the way `fiber:await` works with
-  observers. M4 designs a public Deferred (§35.1). Once that is built, the
-  MemoMap uses it, as v4's does.
+- **The Deferred is the public one** (§35.1), as in v4. Each entry holds a
+  Deferred, completed once with the build's exit through `doneUnsafe`, and
+  awaited with `Deferred.await`. Until M4 it was an internal one, with the
+  same behavior.
 
 ### 27.5 Building and providing
 

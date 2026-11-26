@@ -15,7 +15,8 @@ modelled on Effect TS (v4). Fibers with structured concurrency and cooperative
 interruption, finalizers, Scope and acquireRelease, generators on coroutines,
 and bounded concurrency with forEach and all. Services with Context keys and
 references, layers with shared builds, runCallback, and a scheduler on luv
-(an optional dependency). Targets LuaJIT 2.1 and Lua 5.4.
+(an optional dependency). Concurrency primitives: Ref, SynchronizedRef,
+Deferred, Latch, Semaphore, Queue and PubSub. Targets LuaJIT 2.1 and Lua 5.4.
 ]],
   homepage = "https://github.com/arijit-gogoi/leffect",
   -- No license chosen yet. Add `license = "..."` here, then restore the
