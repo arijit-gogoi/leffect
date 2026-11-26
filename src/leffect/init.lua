@@ -28,6 +28,7 @@ return {
   Fiber = require("leffect.fiber"),
   Latch = require("leffect.latch"),
   Layer = require("leffect.layer"),
+  PubSub = require("leffect.pubsub"),
   Queue = require("leffect.queue"),
   Ref = require("leffect.ref"),
   Scope = require("leffect.scope"),

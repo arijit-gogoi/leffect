@@ -50,6 +50,7 @@ build = {
     ["leffect.fiber"] = "src/leffect/fiber.lua",
     ["leffect.latch"] = "src/leffect/latch.lua",
     ["leffect.layer"] = "src/leffect/layer.lua",
+    ["leffect.pubsub"] = "src/leffect/pubsub.lua",
     ["leffect.queue"] = "src/leffect/queue.lua",
     ["leffect.ref"] = "src/leffect/ref.lua",
     ["leffect.runtime"] = "src/leffect/runtime.lua",
