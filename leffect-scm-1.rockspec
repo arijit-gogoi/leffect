@@ -11,10 +11,11 @@ description = {
   summary = "An Effect TS-style effect system for Lua",
   detailed = [[
 Lazy effects as data, typed errors (Exit and Cause) and a stack-safe run loop,
-modelled on Effect TS. Fibers with structured concurrency and cooperative
+modelled on Effect TS (v4). Fibers with structured concurrency and cooperative
 interruption, finalizers, Scope and acquireRelease, generators on coroutines,
-and bounded concurrency with forEach and all. Services and layers are
-planned. Targets LuaJIT 2.1 and Lua 5.4.
+and bounded concurrency with forEach and all. Services with Context keys and
+references, layers with shared builds, runCallback, and a scheduler on luv
+(an optional dependency). Targets LuaJIT 2.1 and Lua 5.4.
 ]],
   homepage = "https://github.com/arijit-gogoi/leffect",
   -- No license chosen yet. Add `license = "..."` here, then restore the

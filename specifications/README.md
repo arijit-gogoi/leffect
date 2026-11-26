@@ -7,8 +7,8 @@ number, and the numbers have not changed.
 Status: settled for Milestone M1 on 2026-11-25, and re-pinned the same day.
 The M2 design (Part II, §18–§25) was drafted and approved on 2026-11-25,
 and M2 was built the same day, the items below the cut line included. The M3
-design (Part III, §26–§32) was drafted and approved on 2026-11-26, and M3 is
-being built.
+design (Part III, §26–§32) was drafted and approved on 2026-11-26, and M3 was
+built the same day, the items below the cut line included.
 
 **Reference:** Effect 4.1.5, which is the `effect@4.1.5` tag of
 `Effect-TS/effect` (commit `e3aca1f`). The files are

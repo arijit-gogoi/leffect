@@ -37,9 +37,9 @@ Each of these becomes at least one spec.
     catches (4.1.5).
 15. **Context changes are undone on every exit path** (M2). `SetContext`
     frames restore the context in `onPop`, which runs even for skipped frames
-    (§18). The M3 design's `updateServiceScoped` is the one exception: it
-    changes the context with no frame, and its scope's finalizer puts the
-    original back (§26.4).
+    (§18). M3's `updateServiceScoped` is the one exception: it changes the
+    context with no frame, and its scope's finalizer puts the original back
+    (§26.4).
 16. **A Scope runs each finalizer once** (M2): newest first, uninterruptibly,
     and a failing finalizer doesn't stop the rest (§19).
 17. **`acquireRelease` registers the release exactly when acquire succeeds**
