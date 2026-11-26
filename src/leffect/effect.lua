@@ -14,6 +14,9 @@ local runtime = require("leffect.runtime")
 local error, setmetatable, time, xpcall = error, setmetatable, os.time, xpcall
 
 local exitSucceed, exitFailCause = core.exitSucceed, core.exitFailCause
+local describe = runtime.describe
+
+local function noop() end
 
 local Effect = {}
 
@@ -279,15 +282,134 @@ function Effect.onInterrupt(self, f)
   end)
 end
 
+-- Services (specifications/26-services.md §26) ------------------------------
+
+-- Context.add's message, for the effects that die instead of raising.
+local NIL_SERVICE = "Context.add: a service can't be nil"
+
+---@param key any
+---@param name string The public function, for the message.
+local function checkKey(key, name)
+  if not Context.isKey(key) then
+    error(name .. ": expected a key, got " .. describe(key), 3)
+  end
+end
+
+--- The key itself: running a key succeeds with its service, or dies if the
+--- context has none (4.1.5's `Effect.service`).
+---@param key leffect.Context.Key
+---@return leffect.Effect
+function Effect.service(key)
+  checkKey(key, "Effect.service")
+  return key
+end
+
+--- Runs `self` with the context `f(context)`. When `self` ends, however it
+--- ends, the fiber's context is what it was before. `f` must return a
+--- Context, or the effect dies.
+---@param self leffect.Effect
+---@param f fun(context: leffect.Context): leffect.Context
+---@return leffect.Effect
+function Effect.updateContext(self, f)
+  return runtime.updateContext(self, function(context)
+    local updated = f(context)
+    if not Context.isContext(updated) then
+      error("Effect.updateContext: f must return a Context, got " .. describe(updated), 0)
+    end
+    return updated
+  end)
+end
+
+--- Runs `self` with `service` under `key`, for `self` only. A fork started
+--- inside keeps the service. If `service` is nil, the effect dies.
+---@param self leffect.Effect
+---@param key leffect.Context.Key
+---@param service any
+---@return leffect.Effect
+function Effect.provideService(self, key, service)
+  checkKey(key, "Effect.provideService")
+  if service == nil then
+    return exitFailCause(Cause.die(NIL_SERVICE))
+  end
+  return runtime.updateContext(self, function(context)
+    return Context.add(context, key, service)
+  end)
+end
+
+--- Runs `acquire`, then runs `self` with its value under `key`. If `acquire`
+--- fails, so does the effect, and `self` never runs.
+---@param self leffect.Effect
+---@param key leffect.Context.Key
+---@param acquire leffect.Effect
+---@return leffect.Effect
+function Effect.provideServiceEffect(self, key, acquire)
+  checkKey(key, "Effect.provideServiceEffect")
+  return core.flatMap(acquire, function(service)
+    return Effect.provideService(self, key, service)
+  end)
+end
+
+--- Runs `self` with `f(current)` under `key`. For a missing Reference, `f`
+--- gets the default; for a missing Service, the effect dies.
+---@param self leffect.Effect
+---@param key leffect.Context.Key
+---@param f fun(current: any): any
+---@return leffect.Effect
+function Effect.updateService(self, key, f)
+  checkKey(key, "Effect.updateService")
+  return core.flatMap(key, function(current)
+    local updated = f(current)
+    if updated == current then
+      return self
+    end
+    return Effect.provideService(self, key, updated)
+  end)
+end
+
+local getContext = core.withFiber(function(fiber)
+  return exitSucceed(fiber.context)
+end)
+
+--- An effect that succeeds with the fiber's context.
+---@return leffect.Effect
+function Effect.context()
+  return getContext
+end
+
+--- Continues with the effect `f(context)`, given the fiber's context.
+---@param f fun(context: leffect.Context): leffect.Effect
+---@return leffect.Effect
+function Effect.contextWith(f)
+  return core.withFiber(function(fiber)
+    return f(fiber.context)
+  end)
+end
+
+--- Runs `self` with the services of `context` added to the fiber's, winning
+--- where both have a key. An Exit is returned as it is.
+---@param self leffect.Effect
+---@param context leffect.Context
+---@return leffect.Effect
+function Effect.provideContext(self, context)
+  if not Context.isContext(context) then
+    error("Effect.provideContext: expected a Context, got " .. describe(context), 2)
+  end
+  if core.isExit(self) then
+    return self
+  end
+  return runtime.updateContext(self, function(current)
+    return Context.merge(current, context)
+  end)
+end
+
 -- Scope (specifications/19-scope.md §19) ------------------------------------
 
 local push = runtime.push
-local SCOPE_KEY = Scope.contextKey
 
 --- An effect that succeeds with the current scope, the one `Effect.scoped` or
 --- `Scope.provide` set. Without one, it dies.
 Effect.scope = core.withFiber(function(fiber)
-  local scope = Context.get(fiber.context, SCOPE_KEY)
+  local scope = Context.getOrElse(fiber.context, Scope.Scope, noop)
   if scope == nil then
     return exitFailCause(
       Cause.die("Effect.scope: no Scope in context; wrap the effect in Effect.scoped")
@@ -315,7 +437,7 @@ function Effect.scoped(self)
       end,
     })
     push(fiber, { _op = "SetContext", context = previous })
-    fiber.context = Context.add(previous, SCOPE_KEY, scope)
+    fiber.context = Context.add(previous, Scope.Scope, scope)
     return self
   end)
 end
@@ -877,8 +999,6 @@ end
 local SyncScheduler = {}
 SyncScheduler.__index = SyncScheduler
 
-local function noop() end
-
 ---@return leffect.SyncScheduler
 local function newSyncScheduler()
   return setmetatable({ queue = {}, head = 1, tail = 0 }, SyncScheduler)
@@ -993,6 +1113,11 @@ methods.interruptible = Effect.interruptible
 methods.onExit = Effect.onExit
 methods.ensuring = Effect.ensuring
 methods.onInterrupt = Effect.onInterrupt
+methods.provideService = Effect.provideService
+methods.provideServiceEffect = Effect.provideServiceEffect
+methods.updateService = Effect.updateService
+methods.provideContext = Effect.provideContext
+methods.updateContext = Effect.updateContext
 methods.scoped = Effect.scoped
 methods.fork = Effect.fork
 methods.forkDaemon = Effect.forkDaemon

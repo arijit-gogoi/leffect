@@ -166,9 +166,14 @@ end
   context after the region ends (§18).
 - In v4, `updateContext` restores the context through `onExitUnsafe`, a frame
   pushed directly. The `SetContext` frame does the same job (§18).
-- `updateContext` lives in `leffect.context`, so `leffect.scope` can use it
-  without requiring `leffect.effect`. `Scope.provide(eff, scope)` becomes
-  `provideService(eff, Scope.Scope, scope)`.
+- The `updateContext` above lives in `leffect.runtime`, next to the frames
+  it pushes, so `leffect.scope` can use it without requiring
+  `leffect.effect`. `Effect.updateContext` adds a check: if `f` returns
+  something other than a Context, the effect dies. `Scope.provide(eff,
+  scope)` is `provideService(eff, Scope.Scope, scope)`.
+- `provideService` with a nil service returns an effect that dies (§26.1).
+  `updateService` is the key run as an effect, then `provideService` of
+  `f(current)`. So a missing Service dies before `f` is called.
 - `updateServiceScoped` is the one exception to invariant 15. It changes the
   fiber's context without pushing a `SetContext` frame, so the change outlasts
   the call. The finalizer it adds to the scope puts the original back, as in

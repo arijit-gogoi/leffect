@@ -41,6 +41,11 @@
 ---@field onExit fun(self: leffect.Effect, f: fun(exit: leffect.Exit): leffect.Effect?): leffect.Effect
 ---@field ensuring fun(self: leffect.Effect, finalizer: leffect.Effect): leffect.Effect
 ---@field onInterrupt fun(self: leffect.Effect, f: fun(interruptors: integer[]): leffect.Effect?): leffect.Effect
+---@field provideService fun(self: leffect.Effect, key: leffect.Context.Key, service: any): leffect.Effect
+---@field provideServiceEffect fun(self: leffect.Effect, key: leffect.Context.Key, eff: leffect.Effect): leffect.Effect
+---@field updateService fun(self: leffect.Effect, key: leffect.Context.Key, f: fun(current: any): any): leffect.Effect
+---@field provideContext fun(self: leffect.Effect, context: leffect.Context): leffect.Effect
+---@field updateContext fun(self: leffect.Effect, f: fun(context: leffect.Context): leffect.Context): leffect.Effect
 ---@field uninterruptible fun(self: leffect.Effect): leffect.Effect
 ---@field interruptible fun(self: leffect.Effect): leffect.Effect
 ---@field fork fun(self: leffect.Effect): leffect.Effect

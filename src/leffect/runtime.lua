@@ -41,7 +41,7 @@ local exitSucceed, exitFailCause = core.exitSucceed, core.exitFailCause
 ---@field opCount integer
 ---@field finalExit leffect.Exit?
 ---@field suspension leffect.Suspension?
----@field context table<string, any> The services the fiber runs with; never mutated.
+---@field context leffect.Context The services the fiber runs with; never mutated.
 ---@field evaluate fun(self: leffect.FiberState, effect: leffect.Effect)
 
 ---Internal: the state of one async wait (specifications/06-async.md §6.2).
@@ -504,6 +504,27 @@ end
 onPop.SetContext = function(frame, fiber)
   fiber.context = frame.context
   return nil
+end
+
+--- Runs `effect` with the context `f(context)`, then puts the fiber's context
+--- back however `effect` ends (specifications/26-services.md §26.4, 4.1.5's
+--- `updateContext`). The SetContext frame is pushed in the step that changes
+--- the context, so no interrupt can land between the two. If `f` returns the
+--- current context, nothing is pushed.
+---@param effect leffect.Effect
+---@param f fun(context: leffect.Context): leffect.Context
+---@return leffect.Effect
+function runtime.updateContext(effect, f)
+  return core.withFiber(function(fiber)
+    local previous = fiber.context
+    local context = f(previous)
+    if context == previous then
+      return effect
+    end
+    push(fiber, { _op = "SetContext", context = previous })
+    fiber.context = context
+    return effect
+  end)
 end
 
 -- Gen (specifications/09-gen.md §9) -----------------------------------------

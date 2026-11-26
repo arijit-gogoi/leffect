@@ -1,78 +1,90 @@
--- The fiber context (specifications/18-context.md §18): an immutable table of
--- services, inherited at fork. Until M3 it holds only the current Scope.
+-- The fiber context (specifications/18-context.md §18): an immutable map of
+-- services, inherited at fork. M3 made it public (26-services.md §26); these
+-- specs restate M2's on the public API.
 
 local leffect = require("leffect")
-local Context = require("leffect.context")
+local Context = leffect.Context
 local Effect = leffect.Effect
 local TestScheduler = require("leffect.scheduler.test")
 local h = require("spec.helpers")
 
--- An effect that succeeds with the service under `key` in the current context.
+local K = Context.Service("test/K")
+
+-- An effect that succeeds with the service under `key`, or nil if there is
+-- none.
 local function service(key)
-  return Effect.withFiber(function(fiber)
-    return Effect.succeed(Context.get(fiber.context, key))
+  return Effect.contextWith(function(context)
+    return Effect.succeed(Context.getOrElse(context, key, function()
+      return nil
+    end))
   end)
 end
 
 describe("Context", function()
   it("adds a service to a copy, leaving the original unchanged", function()
-    local one = Context.add(Context.empty, "a", 1)
-    local two = Context.add(one, "b", 2)
-    assert.are.equal(1, Context.get(one, "a"))
-    assert.is_nil(Context.get(one, "b"))
-    assert.are.equal(1, Context.get(two, "a"))
-    assert.are.equal(2, Context.get(two, "b"))
-    assert.is_nil(Context.get(Context.empty, "a"))
-    assert.is_nil(next(Context.empty))
+    local A, B = Context.Service("test/a"), Context.Service("test/b")
+    local one = Context.add(Context.empty(), A, 1)
+    local two = Context.add(one, B, 2)
+    assert.are.equal(1, Context.get(one, A))
+    assert.has_error(function()
+      Context.get(one, B)
+    end, "Service not found: test/b")
+    assert.are.equal(1, Context.get(two, A))
+    assert.are.equal(2, Context.get(two, B))
+    assert.has_error(function()
+      Context.get(Context.empty(), A)
+    end, "Service not found: test/a")
+    assert.is_nil(next(Context.empty().map))
   end)
 
   it("is empty on a root fiber", function()
-    local context = Effect.runSync(Effect.withFiber(function(fiber)
-      return Effect.succeed(fiber.context)
-    end))
-    assert.are.equal(Context.empty, context)
+    assert.are.equal(Context.empty(), Effect.runSync(Effect.context()))
   end)
 
   it("is inherited by every fork, daemon or not", function()
     local scheduler = TestScheduler.new()
     local function seenByFork(fork)
-      return Context.provide(
-        "k",
-        "v",
-        fork(service("k")):flatMap(function(fiber)
+      return Effect.provideService(
+        fork(service(K)):flatMap(function(fiber)
           return fiber:join()
-        end)
+        end),
+        K,
+        "v"
       )
     end
     assert.are.equal("v", h.valueOf(scheduler:run(seenByFork(Effect.fork))))
     assert.are.equal("v", h.valueOf(scheduler:run(seenByFork(Effect.forkDaemon))))
   end)
 
-  describe("provide", function()
+  describe("provideService", function()
     it("sets a service for the effect only", function()
-      local inside = Effect.runSync(Context.provide("k", "v", service("k")))
+      local inside = Effect.runSync(Effect.provideService(service(K), K, "v"))
       assert.are.equal("v", inside)
-      local after = Effect.runSync(Context.provide("k", "v", Effect.void):flatMap(function()
-        return service("k")
+      local after = Effect.runSync(Effect.provideService(Effect.void, K, "v"):flatMap(function()
+        return service(K)
       end))
       assert.is_nil(after)
     end)
 
     it("puts the previous context back after a failure", function()
-      local program = Context.provide("k", "outer", Context.provide("k", "inner", Effect.fail("e")))
+      local program = Effect.provideService(
+        Effect.provideService(Effect.fail("e"), K, "inner"),
+        K,
+        "outer"
+      )
         :catchAll(function()
           return Effect.void
         end)
         :flatMap(function()
-          return service("k")
+          return service(K)
         end)
       assert.is_nil(Effect.runSync(program))
-      local nested = Context.provide(
-        "k",
-        "outer",
-        Context.provide("k", "inner", Effect.fail("e")):catchAll(function()
-          return service("k")
-        end)
+      local nested = Effect.provideService(
+        Effect.provideService(Effect.fail("e"), K, "inner"):catchAll(function()
+          return service(K)
+        end),
+        K,
+        "outer"
       )
       assert.are.equal("outer", Effect.runSync(nested))
     end)
@@ -80,12 +92,12 @@ describe("Context", function()
     it("puts the previous context back on interrupt, before outer finalizers run", function()
       local scheduler = TestScheduler.new()
       local seen
-      local program = Context.provide(
-        "k",
-        "outer",
-        Context.provide("k", "inner", Effect.never):ensuring(service("k"):map(function(v)
+      local program = Effect.provideService(
+        Effect.provideService(Effect.never, K, "inner"):ensuring(service(K):map(function(v)
           seen = v
-        end))
+        end)),
+        K,
+        "outer"
       )
       local fiber = h.started(scheduler, program)
       fiber:interruptUnsafe()

@@ -43,14 +43,14 @@ services/layers. Effect TS's behavior is the reference: when in doubt, match it.
 
 ```
 src/leffect/
-  init.lua          -- public entry: Cause, Effect, Exit, Fiber, Scope, run
+  init.lua          -- public entry: Cause, Context, Effect, Exit, Fiber, Scope, run
   core.lua          -- effect representation: shared metatable, op names, primitives
   effect.lua        -- public API: constructors, combinators, runners
   exit.lua
   cause.lua
   runtime.lua       -- fiber run loop, frames, gen
   fiber.lua
-  context.lua       -- internal: the fiber context (services)
+  context.lua       -- Context: services, Service and Reference keys
   scope.lua         -- Scope
   scheduler/test.lua
 spec/               -- busted specs

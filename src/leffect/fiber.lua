@@ -51,7 +51,7 @@ function Fiber.new(scheduler, interruptible)
     pendingInterrupt = false,
     observers = {},
     opCount = 0,
-    context = Context.empty,
+    context = Context.empty(),
   }, FiberMT)
 end
 

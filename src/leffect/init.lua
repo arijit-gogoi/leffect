@@ -21,6 +21,7 @@
 
 return {
   Cause = require("leffect.cause"),
+  Context = require("leffect.context"),
   Effect = require("leffect.effect"),
   Exit = require("leffect.exit"),
   Fiber = require("leffect.fiber"),

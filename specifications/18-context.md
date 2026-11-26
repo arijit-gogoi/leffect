@@ -13,9 +13,10 @@ context public, with key objects instead of strings (§26).
 - **The table.** `fiber.context` is an immutable table of services keyed by
   strings, like v4's service keys. M2 uses one key, `"leffect/Scope"`.
   - Adding a service copies the table; nothing mutates a context.
-  - The internal module `leffect.context` has `empty`,
+  - M2's internal module `leffect.context` had `empty`,
     `add(ctx, key, value)`, `get(ctx, key)`, and
-    `provide(key, value, eff)`, which is `provideService` below.
+    `provide(key, value, eff)`, which is `provideService` below. M3 replaced
+    it with the public Context of §26.1, keyed by key objects.
 - **Inheritance.** Root fibers start with `empty`. `forkUnsafe` hands the
   child the parent's table (§8), so every fork, daemon or not, sees the
   parent's Scope.

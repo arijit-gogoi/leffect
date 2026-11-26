@@ -44,9 +44,10 @@ local ScopeMT = { __name = "leffect.Scope" }
 
 local Scope = {}
 
---- The context key the current scope lives under. Context, Tag and Layer come
---- in M3; until then this is the only service.
-Scope.contextKey = "leffect/Scope"
+--- The key of the current scope (4.1.5's `Scope.Scope`). `Effect.scoped` puts
+--- a fresh scope under it. Running it gives the current scope, or dies with
+--- "Service not found: leffect/Scope"; `Effect.scope` dies with a hint.
+Scope.Scope = Context.Service("leffect/Scope")
 
 ---@param strategy any
 ---@param parent leffect.Scope?
@@ -361,7 +362,9 @@ end
 ---@param scope leffect.Scope
 ---@return leffect.Effect
 function Scope.provide(effect, scope)
-  return Context.provide(Scope.contextKey, scope, effect)
+  return runtime.updateContext(effect, function(context)
+    return Context.add(context, Scope.Scope, scope)
+  end)
 end
 
 --- Runs `effect` with `scope` as the current scope, then closes the scope with
