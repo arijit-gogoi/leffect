@@ -37,6 +37,16 @@ the public Deferred.
   - Queue: the step offers a message, and the second taker gets it.
   - PubSub: the step publishes a message, and the second fiber taking from
     the same subscription gets it.
+- **An accepted offer stays accepted** (decision 54, §14). In each case, one
+  step makes room, which accepts a waiting message, and interrupts its sender
+  with `interruptUnsafe`:
+  - Queue: a full `bounded(1)` has one offer waiting. The step calls
+    `takeUnsafe`, which moves the waiting message in. The offerer ends with
+    an interrupt, and the queue holds its message exactly once.
+  - PubSub: a bounded hub is full for its slowest subscriber, and one publish
+    waits. In the step, that subscriber takes a message. The publisher ends
+    with an interrupt, and the subscriber gets the published message exactly
+    once.
 
 **Ref** (§34)
 - `make` then `get`, and every function in §34's table, with its result.
